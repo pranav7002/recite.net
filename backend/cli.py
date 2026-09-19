@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
 
 from backend.agent import TurnResult, answer
+from backend.citations import cited
 
 EXIT_WORDS = {"exit", "quit", "q"}
-CITE = re.compile(r"\(([^,()]+),\s*p\.\s*(\d+)\)")
 
 
 def main() -> None:
@@ -38,11 +37,6 @@ def main() -> None:
         print(f"cited:     {cited(result.text)}")
         print(f"retrieved: {citations(result)}")
         print(f"steps: {result.steps} | passages: {len(result.passages)} | total: {elapsed:.1f}s")
-
-
-def cited(text: str) -> str:
-    """Pages the answer itself cites; empty means the model cited nothing."""
-    return ", ".join(f"{d.strip()}, p. {p}" for d, p in CITE.findall(text)) or "(none)"
 
 
 def citations(result: TurnResult) -> str:

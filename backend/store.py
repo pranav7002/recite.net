@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +30,11 @@ def _connect(register: bool = True) -> psycopg.Connection:
         from pgvector.psycopg import register_vector
         register_vector(conn)
     return conn
+
+
+def connect(register: bool = True) -> psycopg.Connection:
+    """Public connection factory for retrieval; registers the vector type."""
+    return _connect(register)
 
 
 def init_db() -> None:
@@ -53,7 +59,7 @@ def get_chunks(doc_id: str) -> list:
             """
             SELECT c.id, c.doc_id, d.name, c.page, c.section, c.text
             FROM chunks c JOIN documents d ON d.id = c.doc_id
-            WHERE c.doc_id = %s ORDER BY c.chunk_index.id
+            WHERE c.doc_id = %s ORDER BY c.chunk_index
             """,
             (doc_id,),
         )
@@ -84,3 +90,17 @@ def add(doc_id: str, name: str, full_text: str, chunks: list, vectors: np.ndarra
             rows,
         )
     log.info("stored doc %s: %d chunks", doc_id, len(chunks))
+
+
+def quota_take(model: str, day: date) -> int:
+    """Atomically increment a model's daily call counter; returns the new count."""
+    with _connect(register=False) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO quota_daily (model, day, calls) VALUES (%s, %s, 1)
+            ON CONFLICT (model, day) DO UPDATE SET calls = quota_daily.calls + 1
+            RETURNING calls
+            """,
+            (model, day),
+        )
+        return cur.fetchone()[0]

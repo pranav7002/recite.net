@@ -1,47 +1,54 @@
-"""Gemini API client, rate limiter, and embedding helpers.
+"""Thin wrapper over the OpenAI client pointed at Gemini — the one place that
+talks to the API and deals with free-tier limits.
 
-Synchronous on purpose: ingest runs it from a worker thread, so the rate
-limiter's sleeps never block the event loop.
+Chat goes through Gemini's OpenAI-compatible endpoint. Embeddings go through
+the native google-genai client, because the compatibility layer does not
+expose Gemini's output-dimension option. Everything else receives an LLM
+instance as a parameter, which is what lets tests swap in a fake.
 """
 from __future__ import annotations
 
 import logging
 import os
+import random
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import numpy as np
 from dotenv import load_dotenv
+from openai import OpenAI, RateLimitError
+
+from backend import store, trace
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 log = logging.getLogger("recite.llm")
 
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+PACIFIC = ZoneInfo("America/Los_Angeles")       # daily quotas reset at midnight Pacific
+
 DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001"
-# Free-tier limits vary per project; these are conservative defaults. Put the
-# real numbers from your AI Studio rate-limit page in .env.
 EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "100"))
 EMBED_RPM = float(os.getenv("EMBED_RPM", "5"))
 EMBED_DIMENSIONS = int(os.getenv("EMBED_DIMENSIONS", "768"))
 
-_client = None
+
+def _api_key() -> str:
+    key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("GEMINI_API_KEY is not set — add it to .env")
+    return key
 
 
-def _get_client():
-    global _client
-    if _client is None:
-        from google import genai
-
-        api_key = (os.getenv("GOOGLE_API_KEY") or "").strip()
-        if not api_key:
-            raise RuntimeError("GOOGLE_API_KEY is not set — add it to .env")
-        _client = genai.Client(api_key=api_key)
-    return _client
+class QuotaExhausted(Exception):
+    """Raised when a model's free-tier quota is used up."""
 
 
-class RateLimiter:
-    """Spaces calls out evenly so a per-minute limit is never exceeded."""
+class Limiter:
+    """Spaces calls 60/rpm seconds apart so a per-minute limit is never exceeded."""
 
     def __init__(self, rpm: float) -> None:
         if rpm <= 0:
@@ -50,18 +57,89 @@ class RateLimiter:
         self._lock = threading.Lock()
         self._next_call = 0.0
 
-    def wait(self) -> None:
+    def wait(self) -> float:
         with self._lock:
             now = time.monotonic()
-            delay = self._next_call - now
+            delay = max(self._next_call - now, 0.0)
             if delay > 0:
                 log.info("rate limiter: sleeping %.1fs", delay)
                 time.sleep(delay)
                 now = time.monotonic()
             self._next_call = max(now, self._next_call) + self._interval
+            return delay
 
 
-_embed_limiter = RateLimiter(EMBED_RPM)
+class DailyCounter:
+    """The quota table in Postgres: one row per (model, day)."""
+
+    def __init__(self, model: str, rpd: int) -> None:
+        self.model, self.rpd = model, rpd
+
+    def take(self) -> None:
+        count = store.quota_take(self.model, datetime.now(PACIFIC).date())
+        if count > self.rpd:
+            raise QuotaExhausted(f"{self.model}: {self.rpd} requests/day exhausted")
+
+
+class LLM:
+    def __init__(self, model: str, rpm: int, rpd: int) -> None:
+        self.model = model
+        self.limiter = Limiter(rpm)
+        self.day_budget = DailyCounter(model, rpd)
+
+    def chat(self, messages, tools=None, temperature=0.2, stream=False, **kw):
+        self.day_budget.take()                      # raises before a wasted call
+        waited = self.limiter.wait()
+        for attempt in range(5):
+            try:
+                t = time.monotonic()
+                resp = _chat_client().chat.completions.create(
+                    model=self.model, messages=messages, tools=tools,
+                    temperature=temperature, stream=stream, **kw,
+                )
+                trace.record(model=self.model, wait_s=round(waited, 3),
+                             call_s=round(time.monotonic() - t, 3))
+                return resp
+            except RateLimitError:
+                time.sleep(min(60, 2 ** attempt) + random.random())   # backoff with jitter
+        raise QuotaExhausted(f"{self.model}: rate limited after 5 attempts")
+
+
+answer_llm = LLM(
+    os.getenv("ANSWER_MODEL", "gemini-3.8-flash"),
+    int(os.getenv("ANSWER_MODEL_RPM", "10")),
+    int(os.getenv("ANSWER_MODEL_RPD", "1000")),
+)
+check_llm = LLM(
+    os.getenv("CHECK_MODEL", "gemini-3.5-flash-lite"),
+    int(os.getenv("CHECK_MODEL_RPM", "15")),
+    int(os.getenv("CHECK_MODEL_RPD", "1000")),
+)
+
+
+# ---- embeddings (native google-genai: the compat layer lacks output dims) ----
+
+_chat_client_singleton = None
+_genai_client_singleton = None
+
+
+def _chat_client() -> OpenAI:
+    global _chat_client_singleton
+    if _chat_client_singleton is None:
+        _chat_client_singleton = OpenAI(base_url=GEMINI_BASE_URL, api_key=_api_key())
+    return _chat_client_singleton
+
+
+def _genai_client():
+    global _genai_client_singleton
+    if _genai_client_singleton is None:
+        from google import genai
+
+        _genai_client_singleton = genai.Client(api_key=_api_key())
+    return _genai_client_singleton
+
+
+_embed_limiter = Limiter(EMBED_RPM)
 
 
 def embed(
@@ -74,7 +152,7 @@ def embed(
     if not texts:
         return []
     model = model or os.getenv("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
-    client = _get_client()
+    client = _genai_client()
     out: list[list[float]] = []
     started = time.monotonic()
     for i in range(0, len(texts), batch_size):

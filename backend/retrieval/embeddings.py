@@ -29,7 +29,7 @@ class EmbeddingRetriever:
         self._embed = embed
 
     def search(self, query: str, k: int = 5) -> list[Passage]:
-        vector = self._embed([query], dimensions=llm.EMBED_DIMENSIONS)[0]
+        vector = self._embed([query], dimensions=llm.EMBED_DIMENSIONS, task_type="RETRIEVAL_QUERY")[0]
         with store.connect() as conn, conn.cursor() as cur:
             cur.execute(_SEARCH_SQL, {"q": np.asarray(vector, dtype=np.float32), "k": k})
             rows = cur.fetchall()

@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 from dotenv import load_dotenv
+from google.genai import errors as genai_errors
 from openai import OpenAI, RateLimitError
 
 from backend import store, trace
@@ -33,6 +34,7 @@ PACIFIC = ZoneInfo("America/Los_Angeles")       # daily quotas reset at midnight
 DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001"
 EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "100"))
 EMBED_RPM = float(os.getenv("EMBED_RPM", "5"))
+EMBED_RPD = int(os.getenv("EMBED_RPD", "1000"))
 EMBED_DIMENSIONS = int(os.getenv("EMBED_DIMENSIONS", "768"))
 
 
@@ -147,8 +149,10 @@ def embed(
     model: str | None = None,
     batch_size: int = EMBED_BATCH_SIZE,
     dimensions: int = EMBED_DIMENSIONS,
+    task_type: str | None = None,
 ) -> list[list[float]]:
-    """Embed texts in batches; every API call passes through the rate limiter."""
+    """Embed texts in batches; each API call goes through the rate limiter,
+    the daily quota counter, and the same retry-with-backoff as chat()."""
     if not texts:
         return []
     model = model or os.getenv("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
@@ -157,18 +161,34 @@ def embed(
     started = time.monotonic()
     for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
-        _embed_limiter.wait()
-        response = client.models.embed_content(
-            model=model,
-            contents=batch,
-            config={"output_dimensionality": dimensions},
-        )
-        out.extend(list(e.values) for e in response.embeddings)
+        out.extend(_embed_batch(client, model, batch, dimensions, task_type))
     log.info(
         "embedded %d texts with %s (%d dim) in %.1fs",
         len(texts), model, dimensions, time.monotonic() - started,
     )
     return out
+
+
+def _embed_batch(client, model: str, batch: list[str], dimensions: int,
+                 task_type: str | None) -> list[list[float]]:
+    DailyCounter(model, EMBED_RPD).take()          # raises before a wasted call
+    waited = _embed_limiter.wait()
+    for attempt in range(5):
+        try:
+            t = time.monotonic()
+            config: dict = {"output_dimensionality": dimensions}
+            if task_type:
+                config["task_type"] = task_type
+            response = client.models.embed_content(model=model, contents=batch, config=config)
+            trace.record(model=model, op="embed", wait_s=round(waited, 3),
+                         call_s=round(time.monotonic() - t, 3))
+            return [list(e.values) for e in response.embeddings]
+        except genai_errors.APIError as e:
+            if getattr(e, "code", None) == 429:
+                time.sleep(min(60, 2 ** attempt) + random.random())   # backoff with jitter
+                continue
+            raise
+    raise QuotaExhausted(f"{model}: rate limited after 5 attempts")
 
 
 def normalise(vectors: list[list[float]] | np.ndarray) -> np.ndarray:

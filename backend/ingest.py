@@ -281,7 +281,7 @@ def index_document(path: Path) -> list[Chunk]:
         chunk.doc_id = doc_id
         chunk.doc_name = path.name
 
-    vectors = llm.embed([c.text for c in chunks])
+    vectors = llm.embed([c.text for c in chunks], task_type="RETRIEVAL_DOCUMENT")
     full_text = "\n\n".join(f"[[page {p.page}]]\n{p.text}" for p in pages)
     store.add(doc_id=doc_id, name=path.name, full_text=full_text,
               chunks=chunks, vectors=llm.normalise(vectors))

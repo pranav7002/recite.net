@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS doc_text (
 CREATE TABLE IF NOT EXISTS chunks (
     id          TEXT PRIMARY KEY,        -- "<doc_id>:<n>"
     doc_id      TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    chunk_index INT  NOT NULL,           -- position in the document, for ordering
     page        INT  NOT NULL,           -- 1-based, for citations
     section     TEXT,
     text        TEXT NOT NULL,
@@ -23,3 +24,5 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS chunks_doc_id_idx ON chunks (doc_id);
 CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks
     USING hnsw (embedding vector_cosine_ops);
+
+CREATE UNIQUE INDEX IF NOT EXISTS chunks_doc_order_idx ON chunks (doc_id, chunk_index);

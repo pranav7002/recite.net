@@ -22,18 +22,18 @@ SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 DEFAULT_DATABASE_URL = "postgresql://localhost:5432/recite"
 
 
-def _connect() -> psycopg.Connection:
+def _connect(register: bool = True) -> psycopg.Connection:
     url = os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
     conn = psycopg.connect(url)
-    from pgvector.psycopg import register_vector
-
-    register_vector(conn)
+    if register:                                   # vector type must exist first
+        from pgvector.psycopg import register_vector
+        register_vector(conn)
     return conn
 
 
 def init_db() -> None:
     """Create tables and indexes; safe to run more than once."""
-    with _connect() as conn:
+    with _connect(register=False) as conn:         # schema creates the extension
         conn.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
     log.info("schema applied")
 
@@ -53,7 +53,7 @@ def get_chunks(doc_id: str) -> list:
             """
             SELECT c.id, c.doc_id, d.name, c.page, c.section, c.text
             FROM chunks c JOIN documents d ON d.id = c.doc_id
-            WHERE c.doc_id = %s ORDER BY c.id
+            WHERE c.doc_id = %s ORDER BY c.chunk_index.id
             """,
             (doc_id,),
         )
@@ -64,8 +64,8 @@ def get_chunks(doc_id: str) -> list:
 def add(doc_id: str, name: str, full_text: str, chunks: list, vectors: np.ndarray) -> None:
     """Insert a document atomically: documents row + doc_text row + chunks."""
     rows = [
-        (c.id, c.doc_id, c.page, c.section, c.text, np.asarray(v, dtype=np.float32))
-        for c, v in zip(chunks, vectors, strict=True)
+        (c.id, c.doc_id, i, c.page, c.section, c.text, np.asarray(v, dtype=np.float32))
+        for i, (c, v) in enumerate(zip(chunks, vectors, strict=True))
     ]
     with _connect() as conn, conn.transaction(), conn.cursor() as cur:
         cur.execute(
@@ -78,8 +78,8 @@ def add(doc_id: str, name: str, full_text: str, chunks: list, vectors: np.ndarra
         )
         cur.executemany(
             """
-            INSERT INTO chunks (id, doc_id, page, section, text, embedding)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO chunks (id, doc_id, chunk_index, page, section, text, embedding)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
             rows,
         )

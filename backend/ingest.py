@@ -239,11 +239,17 @@ def chunk_pages(pages: list[Page], size: int = CHUNK_TOKENS, overlap: int = OVER
         for para in page.paragraphs:
             tokens = len(_ENC.encode(para.text))
             if tokens > size:                          # oversized paragraph: hard split
-                finalize()
+                if buf_fresh:                          # only flush if there is real, unsaved text
+                    finalize()
                 encoded = _ENC.encode(para.text)
                 for i in range(0, len(encoded), size - overlap):
                     chunks.append(Chunk(id="", doc_id="", doc_name="", page=para.page,
                                         section=para.section, text=_ENC.decode(encoded[i : i + size])))
+                # carry overlap from the end of THIS paragraph, not from text before it
+                tail = _ENC.decode(encoded[-overlap:]) if overlap else ""
+                buf = [tail] if tail else []
+                buf_tokens = len(_ENC.encode(tail)) if tail else 0
+                buf_fresh = False
                 continue
             if buf_fresh and buf_tokens + tokens > size:
                 finalize()
@@ -276,7 +282,7 @@ def index_document(path: Path) -> list[Chunk]:
         chunk.doc_name = path.name
 
     vectors = llm.embed([c.text for c in chunks])
-    full_text = "\n\n".join(p.text for p in pages)
+    full_text = "\n\n".join(f"[[page {p.page}]]\n{p.text}" for p in pages)
     store.add(doc_id=doc_id, name=path.name, full_text=full_text,
               chunks=chunks, vectors=llm.normalise(vectors))
     return chunks

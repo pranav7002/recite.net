@@ -49,6 +49,8 @@ def ask(req: AskRequest) -> dict:
             "total_s": round(elapsed, 3),
             "steps": result.steps,
             "passages": len(result.passages),
+            "grounding": result.grounding,
+            "retried": result.retried,
             "retrieved": [{"doc": p.doc_name, "page": p.page, "score": round(p.score, 4)}
                           for p in result.passages],
         },

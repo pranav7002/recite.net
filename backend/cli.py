@@ -36,6 +36,7 @@ def main() -> None:
         print()
         print(f"cited:     {cited(result.text)}")
         print(f"retrieved: {citations(result)}")
+        print(f"grounding: {result.grounding} (retried: {result.retried})")
         print(f"steps: {result.steps} | passages: {len(result.passages)} | total: {elapsed:.1f}s")
 
 

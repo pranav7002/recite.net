@@ -1,7 +1,7 @@
 """Tools the model may call, with Pydantic-validated arguments.
 
 search_docs runs a retrieval search. email_summary only appends a JSON line to
-data/outbox.json — it never sends anything. Day 3's guardrails gate it.
+data/outbox.json — it never sends anything; the agent loop's guardrails gate it.
 """
 from __future__ import annotations
 
@@ -96,6 +96,6 @@ email_summary = Tool(
     mutating=True,
 )
 
-# Only non-mutating tools are offered until the guardrails exist.
-TOOLS = [search_docs]              # add email_summary back with the guardrails on Day 2
-ALL_TOOLS = [search_docs, email_summary]
+# Both tools are offered; the mutating email_summary is gated by the guardrails
+# in the agent loop before anything is recorded or sent.
+TOOLS = [search_docs, email_summary]

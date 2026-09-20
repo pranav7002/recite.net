@@ -61,5 +61,4 @@ def appears_in_retrieved(addr: str, state) -> bool:
 
 
 def render(tool, args: dict) -> str:
-    fields = ", ".join(f"{k}={v!r}" for k, v in args.items())
-    return f"{tool.name}({fields})"
+    return f"Send an email to {args['to']} with the subject \"{args['subject']}\"? Say confirm or cancel."

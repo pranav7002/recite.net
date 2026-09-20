@@ -99,3 +99,11 @@ email_summary = Tool(
 # Both tools are offered; the mutating email_summary is gated by the guardrails
 # in the agent loop before anything is recorded or sent.
 TOOLS = [search_docs, email_summary]
+
+TOOLS_BY_NAME = {t.name: t for t in TOOLS}
+
+
+def run_tool(name: str, args: dict) -> str:
+    """Run a tool by name with already-validated arguments (for confirmation)."""
+    tool = TOOLS_BY_NAME[name]
+    return tool.run(tool.args_model.model_validate(args), {})

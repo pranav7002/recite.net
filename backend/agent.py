@@ -9,20 +9,17 @@ from dataclasses import dataclass, field
 
 from pydantic import ValidationError
 
-from backend import grounding, guardrails
+from backend import grounding, guardrails, store
 from backend.llm import answer_llm, check_llm
 from backend.prompts import SYSTEM_PROMPT
 from backend.retrieval.base import Passage, Retriever
 from backend.retrieval.embeddings import EmbeddingRetriever
-from backend.tools import TOOLS, format_passages
+from backend.tools import TOOLS, TOOLS_BY_NAME, format_passages
 
 K = 5
 MAX_ROUNDS = 3
 HISTORY_TURNS = 3
 FALLBACK_ANSWER = "I couldn't find a complete answer in your notes. Try asking more specifically."
-
-TOOLS_BY_NAME = {t.name: t for t in TOOLS}
-
 
 @dataclass
 class TurnState:
@@ -131,7 +128,8 @@ def _run_until_answer(messages: list[dict], model, retriever, state: TurnState,
                     state.blocked_reason = verdict.reason
             elif verdict.action == "needs_confirmation":
                 if state.pending_action is None:
-                    state.pending_action = {"tool": tool.name, "args": args.model_dump()}
+                    state.pending_action = {"id": store.save_pending(tool.name, args.model_dump()),
+                                            "tool": tool.name, "args": args.model_dump()}
                 messages.append({"role": "tool", "tool_call_id": call.id,
                                  "content": f"Pending confirmation: {verdict.summary} (recorded, not executed)"})
                 state.tool_calls += 1

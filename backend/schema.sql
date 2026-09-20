@@ -34,3 +34,11 @@ CREATE TABLE IF NOT EXISTS quota_daily (
     calls  INT  NOT NULL DEFAULT 0,
     PRIMARY KEY (model, day)
 );
+
+CREATE TABLE IF NOT EXISTS pending (
+    id          TEXT PRIMARY KEY,        -- uuid4 hex
+    tool        TEXT NOT NULL,
+    args        JSONB NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',   -- pending | executed | cancelled
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -38,11 +38,15 @@ EMBED_RPD = int(os.getenv("EMBED_RPD", "1000"))
 EMBED_DIMENSIONS = int(os.getenv("EMBED_DIMENSIONS", "768"))
 
 
+def _required(name: str) -> str:
+    value = (os.getenv(name) or "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is not set — add it to .env")
+    return value
+
+
 def _api_key() -> str:
-    key = (os.getenv("GEMINI_API_KEY") or "").strip()
-    if not key:
-        raise RuntimeError("GEMINI_API_KEY is not set — add it to .env")
-    return key
+    return _required("GEMINI_API_KEY")
 
 
 class QuotaExhausted(Exception):
@@ -108,12 +112,12 @@ class LLM:
 
 
 answer_llm = LLM(
-    os.getenv("ANSWER_MODEL", "gemini-3.8-flash"),
+    _required("ANSWER_MODEL"),
     int(os.getenv("ANSWER_MODEL_RPM", "10")),
     int(os.getenv("ANSWER_MODEL_RPD", "1000")),
 )
 check_llm = LLM(
-    os.getenv("CHECK_MODEL", "gemini-3.5-flash-lite"),
+    _required("CHECK_MODEL"),
     int(os.getenv("CHECK_MODEL_RPM", "15")),
     int(os.getenv("CHECK_MODEL_RPD", "1000")),
 )

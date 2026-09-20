@@ -1,0 +1,13 @@
+# Retrieval cases, written by hand from previous-year papers.
+#
+# Schema:
+#   - id: lookup_07
+#     type: lookup          # lookup | multihop | structural
+#     question: "What is the propagation delay of a 74LS00 gate?"
+#     expected_pages:
+#       - {doc: ec101_notes, page: 47}
+#     expected_answer: "About 9.5 ns typical"
+#     split: report         # tune | report | heldout
+#
+# 12 lookup, 12 multihop, 6 structural. Mark 10 tune, 15 report, 5 heldout.
+[]

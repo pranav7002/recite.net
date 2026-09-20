@@ -1,0 +1,60 @@
+name: evals
+on:
+  workflow_dispatch:   # manual; course PDFs are not committed (copyright)
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: sonar
+          POSTGRES_PASSWORD: sonar
+          POSTGRES_DB: sonar_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sonar"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://sonar:sonar@localhost:5432/sonar_test
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      ANSWER_MODEL: ${{ vars.ANSWER_MODEL }}
+      CHECK_MODEL: ${{ vars.CHECK_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Hash corpus
+        id: corpus
+        run: echo "hash=$(find data/pdfs -type f -exec sha256sum {} + 2>/dev/null | sort | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - name: Restore corpus dump
+        uses: actions/cache@v4
+        with:
+          path: corpus.dump
+          key: corpus-${{ steps.corpus.outputs.hash }}
+      - run: psql "$DATABASE_URL" -f backend/schema.sql
+      - name: Restore or index corpus
+        run: |
+          if [ -f corpus.dump ]; then
+            pg_restore --data-only -d "$DATABASE_URL" corpus.dump
+          else
+            python -m backend.ingest data/pdfs
+          fi
+      - run: python -m evals.run_evals --suite retrieval --arm embeddings --runs 3 --split report
+      - name: Safety evals
+        if: always()
+        run: python -m evals.run_evals --suite safety --arm embeddings --runs 3
+      - name: Dump corpus for cache
+        if: always()
+        run: pg_dump --data-only -d "$DATABASE_URL" -t documents -t doc_text -t chunks -Fc > corpus.dump
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: evals/results/

@@ -3,6 +3,10 @@
 __pycache__/
 *.pyc
 data/index/
+data/pdfs/
+data/attacks/
+data/outbox.json
+evals/results/*.json
 .pytest_cache/
 .ruff_cache/
 .commandcode/

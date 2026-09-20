@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -286,3 +287,24 @@ def index_document(path: Path) -> list[Chunk]:
     store.add(doc_id=doc_id, name=path.name, full_text=full_text,
               chunks=chunks, vectors=llm.normalise(vectors))
     return chunks
+
+
+def _index_dir(root: Path) -> None:
+    for path in sorted(root.glob("*")):
+        if path.suffix.lower() not in {".pdf", ".txt", ".md"}:
+            continue
+        try:
+            print(f"{path.name}: {len(index_document(path))} chunks")
+        except NoTextLayer as e:
+            print(f"{path.name}: skipped — {e}")
+
+
+if __name__ == "__main__":
+    for arg in sys.argv[1:] or ["data/pdfs"]:
+        p = Path(arg)
+        if p.is_dir():
+            _index_dir(p)
+        elif p.is_file():
+            print(f"{p.name}: {len(index_document(p))} chunks")
+        else:
+            print(f"skipping missing path: {p}")

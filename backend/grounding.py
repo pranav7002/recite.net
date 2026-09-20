@@ -44,9 +44,7 @@ class CheckResult(BaseModel):
 
     @property
     def all_supported(self) -> bool:
-        return bool(self.claims) and all(
-            c.verdict.strip().upper() == "SUPPORTED" for c in self.claims
-        )
+        return all(c.verdict.strip().upper() == "SUPPORTED" for c in self.claims)
 
     @property
     def failing(self) -> list[str]:
@@ -96,6 +94,9 @@ def check_and_retry(draft: str, state, messages: list[dict], llm, llm_small,
     `step` runs the model again from the current messages (it may call
     search_docs) and returns the redraft, or None when no answer is produced.
     """
+    if draft.strip() == REFUSAL:
+        return GroundingOutcome(text=REFUSAL, retried=False, supported=True)
+
     result = check(draft, state.passages, llm_small)
     if result.all_supported:
         return GroundingOutcome(text=draft, retried=False, supported=True)
@@ -119,9 +120,8 @@ def check_and_retry(draft: str, state, messages: list[dict], llm, llm_small,
 
 
 def refuse(failing: list[str]) -> str:
-    if not failing:
-        return REFUSAL
-    return f"{REFUSAL} Unsupported: {'; '.join(failing)}"
+    log.info("refused; unsupported claims: %r", failing)
+    return REFUSAL
 
 
 def _ask(llm_small, messages: list[dict]) -> str:

@@ -32,6 +32,7 @@ class TurnState:
     tool_calls: int = 0
     read_untrusted: bool = True      # documents are always untrusted in this app
     pending_action: dict | None = None
+    blocked_reason: str | None = None
     retried: bool = False
 
 
@@ -64,6 +65,11 @@ def answer(question: str, model=answer_llm, retriever: Retriever | None = None,
         # A mutating tool paused the turn for confirmation; nothing executed.
         return TurnResult(text=draft or FALLBACK_ANSWER, passages=state.passages,
                           steps=state.steps, pending_action=state.pending_action)
+    if state.blocked_reason:
+        # The send was refused; write the reply in code so the model cannot
+        # describe (or misreport) a blocked action.
+        return TurnResult(text=f"I didn't send that: {state.blocked_reason}.",
+                          passages=state.passages, steps=state.steps)
     if draft is None:
         return TurnResult(text=FALLBACK_ANSWER, passages=state.passages,
                           steps=state.steps, pending_action=state.pending_action)
@@ -121,6 +127,8 @@ def _run_until_answer(messages: list[dict], model, retriever, state: TurnState,
             if verdict.action == "block":
                 messages.append({"role": "tool", "tool_call_id": call.id,
                                  "content": f"BLOCKED: {verdict.reason}"})
+                if tool.mutating:
+                    state.blocked_reason = verdict.reason
             elif verdict.action == "needs_confirmation":
                 if state.pending_action is None:
                     state.pending_action = {"tool": tool.name, "args": args.model_dump()}

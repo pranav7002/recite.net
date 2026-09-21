@@ -79,10 +79,12 @@ def check(draft: str, passages: list[Passage], llm_small) -> CheckResult:
         return CheckResult(claims=[])
     messages = check_messages(claims, passages)
     for attempt in range(2):
-        result = _parse(_ask(llm_small, messages), claims)
+        raw = _ask(llm_small, messages)
+        result = _parse(raw, claims)
         if result is not None:
             return result
         log.warning("grounding check returned unparseable JSON (attempt %d)", attempt + 1)
+        log.debug("unparseable grounding output: %r", raw[:500])
     log.warning("grounding check failed to parse twice; treating answer as unsupported")
     return _unsupported(claims)
 
@@ -129,9 +131,22 @@ def _ask(llm_small, messages: list[dict]) -> str:
     return resp.choices[0].message.content or ""
 
 
+def _extract_json(text: str) -> str:
+    """Small models often wrap JSON in a code fence, add prose around it, or
+    return the bare claims array; pull out the JSON so those still parse."""
+    text = text.strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        return text[start:end + 1]
+    start, end = text.find("["), text.rfind("]")
+    if start != -1 and end > start:
+        return '{"claims": ' + text[start:end + 1] + "}"
+    return text
+
+
 def _parse(text: str, claims: list[str]) -> CheckResult | None:
     try:
-        result = CheckResult.model_validate_json(text)
+        result = CheckResult.model_validate_json(_extract_json(text))
     except ValidationError:
         return None
     if len(result.claims) != len(claims):

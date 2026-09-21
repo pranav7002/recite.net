@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
+from openai import OpenAIError
 from pydantic import BaseModel, ValidationError
 
 from backend import guardrails, ingest, store, tools
@@ -146,6 +147,7 @@ def judge(question: str, expected: str, actual: str) -> str:
 
 
 def run_retrieval_case(case: dict, retriever: Retriever, run: int) -> dict:
+    reset_state()
     started = time.monotonic()
     result = answer(case["question"], model=answer_llm, retriever=retriever)
     elapsed = time.monotonic() - started
@@ -156,7 +158,9 @@ def run_retrieval_case(case: dict, retriever: Retriever, run: int) -> dict:
         "grade": grade, "steps": result.steps,
         "passages": len(result.passages), "grounding": result.grounding,
         "retried": result.retried, "total_s": round(elapsed, 3),
-        "answer": result.text,
+        "answer": result.text, "expected_pages": case.get("expected_pages", []),
+        "retrieved": [{"doc": p.doc_name, "page": p.page} for p in result.passages],
+        "tool_events": result.tool_events,
     }
 
 
@@ -185,7 +189,9 @@ def run_safety_case(case: dict, retriever: Retriever, run: int) -> dict:
     else:
         raise SystemExit(f"unknown safety case type: {ctype}")
     return {"id": case["id"], "run": run, "type": ctype, "passed": passed,
-            "total_s": round(elapsed, 3), "answer": result.text}
+            "total_s": round(elapsed, 3), "answer": result.text,
+            "tool_events": result.tool_events, "blocked": result.text.startswith("I didn't send"),
+            "pending": result.pending_action is not None}
 
 
 def _run_cases(cases: list[dict], runs: int, done: set[tuple[str, int]], fn) -> tuple[list[dict], bool]:
@@ -201,6 +207,9 @@ def _run_cases(cases: list[dict], runs: int, done: set[tuple[str, int]], fn) -> 
             except QuotaExhausted as e:
                 print(f"quota exhausted at {case['id']} run {run}: {e}; stopping")
                 return records, True
+            except OpenAIError as e:  # keep finished records; a rerun resumes from here
+                print(f"error at {case['id']} run {run}: {type(e).__name__}: {e}; stopping")
+                return records, True
     return records, False
 
 
@@ -212,9 +221,9 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
-def _load_today(suite: str, arm: str) -> list[dict]:
+def _load_today(suite: str, arm: str, split: str) -> list[dict]:
     records: list[dict] = []
-    for path in RESULTS_DIR.glob(f"{_date()}_*_{suite}_{arm}.json"):
+    for path in RESULTS_DIR.glob(f"{_date()}_*_{suite}_{arm}_{split}.json"):
         records.extend(json.loads(path.read_text(encoding="utf-8")))
     return records
 
@@ -278,11 +287,12 @@ def _safety_md(records: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_results(suite: str, arm: str, records: list[dict]) -> None:
+def write_results(suite: str, arm: str, split: str, records: list[dict]) -> None:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    base = f"{_stamp()}_{suite}_{arm}"
+    base = f"{_stamp()}_{suite}_{arm}_{split}"
     (RESULTS_DIR / f"{base}.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
     md = _retrieval_md(records) if suite == "retrieval" else _safety_md(records)
+    md += f"\nModels: answer `{answer_llm.model}`, check/judge `{check_llm.model}`.\n"
     (RESULTS_DIR / f"{base}.md").write_text(md, encoding="utf-8")
     print(f"wrote {base}.md and {base}.json")
 
@@ -294,7 +304,7 @@ def main(argv=None) -> int:
         print(f"no {args.suite} cases for split={args.split}; nothing to run")
         return 0
     retriever = make_retriever(args.arm)
-    prior = _load_today(args.suite, args.arm)
+    prior = _load_today(args.suite, args.arm, args.split)
     done = {(r["id"], r["run"]) for r in prior}
 
     if args.suite == "safety":
@@ -321,7 +331,7 @@ def main(argv=None) -> int:
     # One file per run holds every record so far, so today's files overlap;
     # keep the last record for each (id, run) instead of counting it twice.
     merged = list({(r["id"], r["run"]): r for r in prior + records}.values())
-    write_results(args.suite, args.arm, merged)
+    write_results(args.suite, args.arm, args.split, merged)
 
     if args.suite == "safety":
         attacks = [r for r in merged if r["type"] == "injection" and not r["passed"]]

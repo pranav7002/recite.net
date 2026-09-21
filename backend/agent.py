@@ -31,6 +31,7 @@ class TurnState:
     pending_action: dict | None = None
     blocked_reason: str | None = None
     retried: bool = False
+    tool_events: list[dict] = field(default_factory=list)   # what each tool call did
 
 
 @dataclass
@@ -41,6 +42,7 @@ class TurnResult:
     pending_action: dict | None = None
     retried: bool = False
     grounding: str = "supported"     # "supported" or "refused"
+    tool_events: list[dict] = field(default_factory=list)
 
 
 def answer(question: str, model=answer_llm, retriever: Retriever | None = None,
@@ -61,15 +63,18 @@ def answer(question: str, model=answer_llm, retriever: Retriever | None = None,
     if state.pending_action is not None:
         # A mutating tool paused the turn for confirmation; nothing executed.
         return TurnResult(text=draft or FALLBACK_ANSWER, passages=state.passages,
-                          steps=state.steps, pending_action=state.pending_action)
+                          steps=state.steps, pending_action=state.pending_action,
+                          tool_events=state.tool_events)
     if state.blocked_reason:
         # The send was refused; write the reply in code so the model cannot
         # describe (or misreport) a blocked action.
         return TurnResult(text=f"I didn't send that: {state.blocked_reason}.",
-                          passages=state.passages, steps=state.steps)
+                          passages=state.passages, steps=state.steps,
+                          tool_events=state.tool_events)
     if draft is None:
         return TurnResult(text=FALLBACK_ANSWER, passages=state.passages,
-                          steps=state.steps, pending_action=state.pending_action)
+                          steps=state.steps, pending_action=state.pending_action,
+                          tool_events=state.tool_events)
 
     outcome = grounding.check_and_retry(
         draft, state, messages, model, critic,
@@ -78,7 +83,8 @@ def answer(question: str, model=answer_llm, retriever: Retriever | None = None,
     return TurnResult(text=outcome.text, passages=state.passages, steps=state.steps,
                       pending_action=state.pending_action,
                       retried=outcome.retried,
-                      grounding="supported" if outcome.supported else "refused")
+                      grounding="supported" if outcome.supported else "refused",
+                      tool_events=state.tool_events)
 
 
 def _build_messages(question: str, passages: list[Passage],
@@ -104,10 +110,7 @@ def _run_until_answer(messages: list[dict], model, retriever, state: TurnState,
             messages.append({"role": "assistant", "content": text})
             return text
         messages.append({"role": "assistant", "content": msg.content or "",
-                         "tool_calls": [{"id": c.id, "type": "function",
-                                         "function": {"name": c.function.name,
-                                                      "arguments": c.function.arguments}}
-                                        for c in msg.tool_calls]})
+                         "tool_calls": [_tool_call_dict(c) for c in msg.tool_calls]})
         for call in msg.tool_calls:
             tool = TOOLS_BY_NAME.get(call.function.name)
             if tool is None:
@@ -121,6 +124,8 @@ def _run_until_answer(messages: list[dict], model, retriever, state: TurnState,
                                  "content": f"Error: invalid arguments for {tool.name}: {e}"})
                 continue
             verdict = guardrails.check(tool, args.model_dump(), state)
+            state.tool_events.append({"tool": tool.name, "args": args.model_dump(),
+                                      "verdict": verdict.action, "reason": verdict.reason})
             if verdict.action == "block":
                 messages.append({"role": "tool", "tool_call_id": call.id,
                                  "content": f"BLOCKED: {verdict.reason}"})
@@ -139,6 +144,18 @@ def _run_until_answer(messages: list[dict], model, retriever, state: TurnState,
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
             state.tool_calls += 1
     return None
+
+
+def _tool_call_dict(call) -> dict:
+    """A tool call as an assistant-message entry. Gemini 3 attaches a
+    thought_signature in extra_content and rejects the next request if it is
+    not echoed back, so pass it through when present."""
+    entry = {"id": call.id, "type": "function",
+             "function": {"name": call.function.name, "arguments": call.function.arguments}}
+    extra = (getattr(call, "model_extra", None) or {}).get("extra_content")
+    if extra:
+        entry["extra_content"] = extra
+    return entry
 
 
 def _redraft(messages: list[dict], model, retriever, state: TurnState,

@@ -15,10 +15,11 @@ TEXT = ("The CPU fetches instructions from memory and decodes them before execut
 
 
 def test_duplicate_upload_one_document():
+    before = len(store.list_documents())     # the dev DB may hold real documents
     r1 = api.upload(make_upload("notes.txt", TEXT.encode()))
     r2 = api.upload(make_upload("notes.txt", TEXT.encode()))
     assert r1["doc_id"] == r2["doc_id"]
-    assert len(store.list_documents()) == 1
+    assert len(store.list_documents()) == before + 1
 
 
 def test_upload_unsupported_type_415():

@@ -1,4 +1,4 @@
-# Retrieval cases, written by hand from previous-year papers.
+# Retrieval cases, written by hand from the course slides.
 #
 # Schema:
 #   - id: lookup_07
@@ -10,4 +10,269 @@
 #     split: report         # tune | report | heldout
 #
 # 12 lookup, 12 multihop, 6 structural. Mark 10 tune, 15 report, 5 heldout.
-[]
+#
+#
+# Pages are PDF page indices (1-based), not the slide numbers printed on the slides.
+# `note` marks questions the slides only partly answer (image-only content).
+
+- id: lookup_01
+  type: lookup
+  split: tune
+  question: What mathematical formula is given for population variance $\sigma^2$?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 2
+  expected_answer: Population variance σ² = (1/N) Σ (xᵢ − μ)², the average squared deviation from the mean.
+- id: lookup_02
+  type: lookup
+  split: tune
+  question: What are the three mechanisms of missing data defined in the preprocessing lecture?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 11
+  expected_answer: MCAR (Missing Completely At Random), MAR (Missing At Random) and MNAR (Missing Not At Random).
+- id: lookup_03
+  type: lookup
+  split: tune
+  question: According to the slides, approximately what percentage of the world's data is unstructured?
+  expected_pages:
+  - doc: DAI-101_Lecture_3_Data_Types_Mean_Median
+    page: 5
+  expected_answer: Approximately 80% of the world's data is unstructured.
+- id: lookup_04
+  type: lookup
+  split: tune
+  question: What does the acronym MSE stand for in the context of assessing a model's accuracy?
+  expected_pages:
+  - doc: DS-2 (1)
+    page: 15
+  expected_answer: Mean Squared Error.
+- id: lookup_05
+  type: lookup
+  split: report
+  question: What is the "Golden rule" of the preprocessing pipeline regarding where parameters must be learned?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 10
+  expected_answer: Preprocessing parameters must be learned only from the training data, then applied to the test set.
+- id: lookup_06
+  type: lookup
+  split: report
+  question: According to the flexibility versus interpretability graph, which statistical method is grouped alongside Subset Selection for having high interpretability and low flexibility?
+  expected_pages:
+  - doc: DS-2 (1)
+    page: 14
+  expected_answer: Lasso.
+  note: Answer is only in the graph image on the slide.
+- id: lookup_07
+  type: lookup
+  split: report
+  question: What is the sample variance of the marks 40, 50, 60, 70 and 80 in the worked example, and what is the corresponding standard deviation?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 3
+  expected_answer: Sample variance s² = 250 marks²; standard deviation s ≈ 15.81 marks.
+- id: lookup_08
+  type: lookup
+  split: report
+  question: In NumPy, what does setting `ddof=1` instruct the function to divide by when calculating sample variance?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 3
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 6
+  expected_answer: It divides by n − 1 rather than n (Bessel's correction).
+- id: lookup_09
+  type: lookup
+  split: report
+  question: What is the mathematical equation for Expected Test MSE $E(y_0 - \hat{f}(x_0))^2$?
+  expected_pages:
+  - doc: DS-2 (1)
+    page: 29
+  expected_answer: E(y0 − f̂(x0))² = Var(f̂(x0)) + [Bias(f̂(x0))]² + Var(ε).
+  note: Equation is an image on the slide.
+- id: lookup_10
+  type: lookup
+  split: report
+  question: How is structured data grouped according to the presentation?
+  expected_pages:
+  - doc: DAI-101_Lecture_3_Data_Types_Mean_Median
+    page: 3
+  expected_answer: 'Data can be grouped according to how clearly its structure is defined: structured, semi-structured and unstructured.'
+- id: lookup_11
+  type: lookup
+  split: heldout
+  question: For right-skewed data, what is the ordering of the mode, median and mean?
+  expected_pages:
+  - doc: DAI-101_Lecture_3_Data_Types_Mean_Median
+    page: 17
+  expected_answer: mode < median < mean (the mean is pulled toward the long tail).
+- id: lookup_12
+  type: lookup
+  split: heldout
+  question: In the context of estimating $f$, what is the goal of inference as opposed to prediction?
+  expected_pages:
+  - doc: DS-2 (1)
+    page: 8
+  - doc: DS-2 (1)
+    page: 9
+  expected_answer: For inference the aim is not an accurate estimate of f but to understand how Y changes as the predictors X change.
+- id: multihop_01
+  type: multihop
+  split: tune
+  question: How does computing sample variance differ between NumPy and pandas with respect to the degrees-of-freedom setting?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 6
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 3
+  expected_answer: NumPy needs ddof=1 (np.var(x, ddof=1)) to get the sample variance (ddof=0 gives the population variance); pandas df.var() already uses ddof=1 by default, and df.var(ddof=0) gives the population variance.
+- id: multihop_02
+  type: multihop
+  split: tune
+  question: If a dataset's CGPA values are missing because the grades were not reported due to poor grades, which missing data mechanism is this, and what do the slides say about handling it?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 11
+  expected_answer: 'MNAR (Missing Not At Random): the missingness depends on the missing value itself. The slides say MNAR requires subject knowledge and careful analysis.'
+- id: multihop_03
+  type: multihop
+  split: tune
+  question: How does "data leakage" during preprocessing artificially affect the gap between training and test error that defines the overfitting regime?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 10
+  - doc: DS-2 (1)
+    page: 22
+  expected_answer: Data leakage lets test information into training, making performance look better than it is, which hides the true gap between training and test error that defines overfitting.
+- id: multihop_04
+  type: multihop
+  split: tune
+  question: If a student scores a 70 in the worked example dataset containing marks 40, 50, 60, 70, and 80, what is their exact z-score based on the calculated sample mean and standard deviation?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 7
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 3
+  expected_answer: z = (70 − 60)/15.8 ≈ 0.63.
+- id: multihop_05
+  type: multihop
+  split: report
+  question: In the missing data worked example for the Salary column, why would imputing the NaN values with the median (35) be more robust if an extreme outlier were introduced, and what side effect does mean imputation cause?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 13
+  expected_answer: The median (35 here) is robust if outliers exist, unlike the mean; imputing many values with the mean shrinks the variance of the column.
+- id: multihop_06
+  type: multihop
+  split: report
+  question: In the context of estimating $f$, how does a thin plate spline differ from linear regression in terms of functional form assumptions, and how does this affect the variance of the resulting estimate?
+  expected_pages:
+  - doc: DS-2 (1)
+    page: 11
+  - doc: DS-2 (1)
+    page: 13
+  - doc: DS-2 (1)
+    page: 24
+  expected_answer: 'Linear regression assumes a functional form for f; a thin plate spline assumes none and fits the data closely, so it is more flexible with higher variance: small changes in the training data change f̂ considerably.'
+- id: multihop_07
+  type: multihop
+  split: report
+  question: Using the empirical rule for approximately bell-shaped data, if a class has a mean mark of 60 and a standard deviation of 15.8, between what two values would approximately 95% of the students' scores fall?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 4
+  expected_answer: About 95% of scores fall between 28.4 and 91.6 (μ ± 2σ).
+- id: multihop_08
+  type: multihop
+  split: report
+  question: If you are fitting a linear model to predict the "Income" output variable, which is a continuous quantitative variable on a ratio scale, how is the random error term $\epsilon$ defined in the equation $Y = f(X) + \epsilon$?
+  expected_pages:
+  - doc: DS-2 (1)
+    page: 5
+  - doc: DAI-101_Lecture_3_Data_Types_Mean_Median
+    page: 11
+  expected_answer: ε is independent of X and has a mean of zero. Income is on a ratio scale (L3 p11).
+- id: multihop_09
+  type: multihop
+  split: report
+  question: Why is it valid to compute meaningful ratios for weight but not for temperature in Celsius, and what mathematical operations are appropriate for the interval scale?
+  expected_pages:
+  - doc: DAI-101_Lecture_3_Data_Types_Mean_Median
+    page: 11
+  expected_answer: Weight is a ratio scale with a meaningful zero, so ratios are meaningful (80 kg is twice 40 kg). Celsius is an interval scale with an arbitrary zero, so 40 °C is not twice 20 °C. Interval scales support mean, standard deviation and differences.
+- id: multihop_10
+  type: multihop
+  split: report
+  question: Which pandas code drops an entire column such as Salary, and when do the slides say column deletion is preferable to dropping rows?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 12
+  expected_answer: df.drop(columns=['Salary']). Drop the whole column if it is 60-70% missing (after checking its importance); row deletion is only for MCAR data with few rows affected (< ~5%).
+- id: multihop_11
+  type: multihop
+  split: heldout
+  question: Why does the test Mean Squared Error (MSE) curve generally exhibit a U-shape as model flexibility increases, and how do bias and variance specifically contribute to this shape?
+  expected_pages:
+  - doc: DS-2 (1)
+    page: 24
+  - doc: DS-2 (1)
+    page: 28
+  expected_answer: 'Bias-variance trade-off: as flexibility rises, bias falls faster than variance rises, so test MSE declines; later bias barely improves while variance rises sharply, so test MSE rises again.'
+- id: multihop_12
+  type: multihop
+  split: heldout
+  question: While grades (A, B, C, D) are ordinal and can be coded as numbers, why does the lecture caution that the gap between coded categories does not necessarily imply equal mathematical differences?
+  expected_pages:
+  - doc: DAI-101_Lecture_3_Data_Types_Mean_Median
+    page: 10
+  expected_answer: Ordinal categories only carry order; coding poor = 1, fair = 2, good = 3 does not prove the gap from poor to fair equals the gap from fair to good.
+- id: structural_01
+  type: structural
+  split: tune
+  question: What are the sequential steps structured in the diagram for the Data Preprocessing Pipeline?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 9
+  expected_answer: 'Five boxes in order: data cleaning; handle missing data; outlier detection & treatment; transform & scale; encode categoricals.'
+  note: The slide shows five steps, not four; the question was reworded.
+- id: structural_02
+  type: structural
+  split: tune
+  question: How is the equation for Expected Test MSE structurally decomposed into three distinct mathematical terms on the bias-variance trade-off slide?
+  expected_pages:
+  - doc: DS-2 (1)
+    page: 29
+  expected_answer: Var(f̂(x0)) + [Bias(f̂(x0))]² + Var(ε).
+- id: structural_03
+  type: structural
+  split: report
+  question: In the "Statistical Data Types — The Big Picture" slide, how is Quantitative data structurally sub-divided, and what are the corresponding measurement scales?
+  expected_pages:
+  - doc: DAI-101_Lecture_3_Data_Types_Mean_Median
+    page: 9
+  expected_answer: Quantitative data is split into Discrete and Continuous; by measurement scale it is Interval or Ratio.
+- id: structural_04
+  type: structural
+  split: report
+  question: On the slides demonstrating "Assessing Model Accuracy", what four specific metrics or curves are structurally represented by the Black, Orange, Red, and Grey curves in the plotted graphs?
+  expected_pages:
+  - doc: DS-2 (1)
+    page: 16
+  expected_answer: 'Black: true curve simulated from f. Orange: linear regression model. Red: test MSE. Grey: train MSE.'
+- id: structural_05
+  type: structural
+  split: report
+  question: How is the comparison between the three missing data mechanisms (MCAR, MAR, MNAR) structurally organized in terms of meaning and examples?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 11
+  expected_answer: 'A table with columns Mechanism, Meaning and Example: MCAR (unrelated to any variable; OMR lost), MAR (depends on other observed columns; low-attendance students miss exams), MNAR (depends on the missing value itself; grades not reported due to poor grades).'
+- id: structural_06
+  type: structural
+  split: heldout
+  question: What is the structured three-step process outlined for calculating Variance as the "Average Squared Deviation"?
+  expected_pages:
+  - doc: DAI-101_Lecture_4 Variance_z score_preprocessing_missing data
+    page: 2
+  expected_answer: 'Step 1: deviations from the mean. Step 2: square them (all positive, large deviations weigh more). Step 3: average the squared deviations (σ² = 1000/5 = 200).'

@@ -1,6 +1,8 @@
 name: evals
 on:
   workflow_dispatch:   # manual; course PDFs are not committed (copyright)
+  schedule:
+    - cron: "0 21 * * *"   # nightly, 21:00 UTC
 jobs:
   eval:
     runs-on: ubuntu-latest

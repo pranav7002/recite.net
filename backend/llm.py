@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 from dotenv import load_dotenv
 from google.genai import errors as genai_errors
-from openai import OpenAI, RateLimitError
+from openai import InternalServerError, OpenAI, RateLimitError
 
 from backend import store, trace
 
@@ -106,9 +106,9 @@ class LLM:
                 trace.record(model=self.model, wait_s=round(waited, 3),
                              call_s=round(time.monotonic() - t, 3))
                 return resp
-            except RateLimitError:
+            except (RateLimitError, InternalServerError):   # 429, or 5xx such as 503 overloaded
                 time.sleep(min(60, 2 ** attempt) + random.random())   # backoff with jitter
-        raise QuotaExhausted(f"{self.model}: rate limited after 5 attempts")
+        raise QuotaExhausted(f"{self.model}: rate limited or unavailable after 5 attempts")
 
 
 answer_llm = LLM(

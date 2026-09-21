@@ -203,12 +203,15 @@ def _is_heading_span(text: str, size: float, body_size: float) -> bool:
 # ---- chunking --------------------------------------------------------------
 
 
-def chunk_pages(pages: list[Page], size: int = CHUNK_TOKENS, overlap: int = OVERLAP_TOKENS) -> list[Chunk]:
+def chunk_pages(pages: list[Page], size: int = CHUNK_TOKENS, overlap: int = OVERLAP_TOKENS,
+                split_pages: bool = False) -> list[Chunk]:
     """Paragraph-boundary chunks of ~size tokens with overlap.
 
     A chunk's page and section come from its first fresh paragraph, so a chunk
     that spans pages records the page where it starts. Paragraphs longer than
-    `size` fall back to hard token splits. doc fields are filled in by
+    `size` fall back to hard token splits. With split_pages, a chunk never spans
+    pages (no overlap carried across a page break), so its page is exact; slide
+    decks need this for correct citations. doc fields are filled in by
     index_document().
     """
     chunks: list[Chunk] = []
@@ -237,6 +240,10 @@ def chunk_pages(pages: list[Page], size: int = CHUNK_TOKENS, overlap: int = OVER
         buf_fresh = True
 
     for page in pages:
+        if split_pages:
+            if buf_fresh:
+                finalize()
+            buf, buf_tokens, buf_fresh = [], 0, False   # drop overlap from the previous page
         for para in page.paragraphs:
             tokens = len(_ENC.encode(para.text))
             if tokens > size:                          # oversized paragraph: hard split
@@ -276,7 +283,7 @@ def index_document(path: Path) -> list[Chunk]:
     if sum(len(p.text) for p in pages) < MIN_TEXT_CHARS:
         raise NoTextLayer(path.name)
 
-    chunks = chunk_pages(pages)
+    chunks = chunk_pages(pages, split_pages=path.suffix.lower() == ".pdf")
     for i, chunk in enumerate(chunks):
         chunk.id = f"{doc_id}:{i}"
         chunk.doc_id = doc_id

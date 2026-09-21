@@ -6,14 +6,17 @@ enforces the single-execution guarantee for confirmations.
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
 import time
 from pathlib import Path
+from typing import Annotated, Literal
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from backend import guardrails, ingest, store, tools
+from backend import guardrails, ingest, store, tools, voice
 from backend.agent import answer
 from backend.citations import CITE
 from backend.llm import QuotaExhausted
@@ -66,6 +69,36 @@ def ask(req: AskRequest) -> dict:
                           for p in result.passages],
         },
     }
+
+
+@app.post("/voice")
+async def voice_turn(
+    file: Annotated[UploadFile, File()],
+    session_id: Annotated[str, Form()],
+    t0: Annotated[float, Form()],
+    config: Annotated[Literal["sequential", "stream", "stream_nocheck"], Form()] = "stream",
+) -> StreamingResponse:
+    """Spoken question in, spoken answer out as a server-sent event stream.
+
+    t0 is the browser's timestamp of the last audio frame, so the browser can
+    measure time-to-first-audio. config is sequential | stream | stream_nocheck.
+    """
+    audio = await file.read()
+    with _sessions_lock:
+        history = list(_sessions.get(session_id, []))
+
+    def record(question: str, answer_text: str) -> None:
+        with _sessions_lock:
+            _sessions.setdefault(session_id, []).append(
+                {"question": question, "answer": answer_text})
+
+    gen = voice.voice_turn(audio, history, t0, config, record=record)
+    return StreamingResponse(_sse(gen), media_type="text/event-stream")
+
+
+async def _sse(gen):
+    async for item in gen:
+        yield f"data: {json.dumps(item, default=str)}\n\n"
 
 
 @app.post("/documents")

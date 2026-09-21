@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import random
+import re
 import threading
 import time
 from datetime import datetime
@@ -20,6 +21,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 from dotenv import load_dotenv
 from google.genai import errors as genai_errors
+from google.genai import types
 from openai import InternalServerError, OpenAI, RateLimitError
 
 from backend import store, trace
@@ -36,6 +38,12 @@ EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "100"))
 EMBED_RPM = float(os.getenv("EMBED_RPM", "5"))
 EMBED_RPD = int(os.getenv("EMBED_RPD", "1000"))
 EMBED_DIMENSIONS = int(os.getenv("EMBED_DIMENSIONS", "768"))
+
+TTS_VOICE = os.getenv("TTS_VOICE", "charon")
+TTS_RPM = float(os.getenv("TTS_RPM", "15"))
+TTS_RPD = int(os.getenv("TTS_RPD", "500"))
+STT_RPM = float(os.getenv("STT_RPM", "15"))
+STT_RPD = int(os.getenv("STT_RPD", "500"))
 
 
 def _required(name: str) -> str:
@@ -200,3 +208,85 @@ def normalise(vectors: list[list[float]] | np.ndarray) -> np.ndarray:
     arr = np.asarray(vectors, dtype=np.float32)
     norms = np.linalg.norm(arr, axis=-1, keepdims=True)
     return arr / np.where(norms == 0, 1.0, norms)
+
+
+# ---- speech (native google-genai: transcription and TTS) ----
+
+_tts_limiter = Limiter(TTS_RPM)
+_stt_limiter = Limiter(STT_RPM)
+
+
+def synthesize(text: str, model: str | None = None) -> tuple[bytes, int]:
+    """Text to speech via Gemini. Returns (raw 16-bit mono PCM, sample rate)."""
+    model = model or os.getenv("TTS_MODEL")
+    if not model:
+        raise RuntimeError("TTS_MODEL is not set — add it to .env")
+    config = types.GenerateContentConfig(
+        response_modalities=[types.Modality.AUDIO],
+        speech_config=types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=TTS_VOICE)
+            )
+        ),
+    )
+    DailyCounter(model, TTS_RPD).take()
+    waited = _tts_limiter.wait()
+    for attempt in range(5):
+        try:
+            t = time.monotonic()
+            resp = _genai_client().models.generate_content(model=model, contents=text, config=config)
+            trace.record(model=model, op="tts", wait_s=round(waited, 3),
+                         call_s=round(time.monotonic() - t, 3))
+            blob = _audio_blob(resp)
+            return blob.data, _sample_rate(blob.mime_type)
+        except genai_errors.APIError as e:
+            if getattr(e, "code", None) == 429:
+                time.sleep(min(60, 2 ** attempt) + random.random())
+                continue
+            raise
+    raise QuotaExhausted(f"{model}: rate limited after 5 attempts")
+
+
+def transcribe(audio: bytes, mime_type: str = "audio/wav", model: str | None = None) -> str:
+    """Speech to text via Gemini; returns the transcript."""
+    model = model or os.getenv("STT_MODEL")
+    if not model:
+        raise RuntimeError("STT_MODEL is not set — add it to .env")
+    DailyCounter(model, STT_RPD).take()
+    waited = _stt_limiter.wait()
+    for attempt in range(5):
+        try:
+            t = time.monotonic()
+            resp = _genai_client().models.generate_content(
+                model=model,
+                contents=[types.Part.from_bytes(data=audio, mime_type=mime_type)],
+            )
+            trace.record(model=model, op="stt", wait_s=round(waited, 3),
+                         call_s=round(time.monotonic() - t, 3))
+            return _transcript(resp)
+        except genai_errors.APIError as e:
+            if getattr(e, "code", None) == 429:
+                time.sleep(min(60, 2 ** attempt) + random.random())
+                continue
+            raise
+    raise QuotaExhausted(f"{model}: rate limited after 5 attempts")
+
+
+def _audio_blob(resp) -> types.Blob:
+    for part in resp.candidates[0].content.parts:
+        if part.inline_data is not None:
+            return part.inline_data
+    raise RuntimeError("TTS returned no audio")
+
+
+def _sample_rate(mime_type: str) -> int:
+    match = re.search(r"rate=(\d+)", mime_type or "")
+    return int(match.group(1)) if match else 24000
+
+
+def _transcript(resp) -> str:
+    for part in resp.candidates[0].content.parts:
+        if part.audio_transcription is not None:
+            return part.audio_transcription.text or ""
+    parts = resp.candidates[0].content.parts
+    return (parts[0].text or "") if parts else ""

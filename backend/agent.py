@@ -48,12 +48,15 @@ class TurnResult:
 
 def answer(question: str, model=answer_llm, retriever: Retriever | None = None,
            k: int = K, max_rounds: int = MAX_ROUNDS,
-           history: list[dict] | None = None, critic=check_llm) -> TurnResult:
+           history: list[dict] | None = None, critic=check_llm,
+           check_grounding: bool = True) -> TurnResult:
     """Answer a question from retrieved passages; the model may call tools.
 
     history holds earlier turns as {"question", "answer"} dicts. Only their text
     is replayed, never old passages, so document text from past turns never
-    re-enters the prompt.
+    re-enters the prompt. With check_grounding=False the draft is returned
+    unchecked, which the voice pipeline's stream_nocheck config uses to measure
+    what the check costs.
     """
     retriever = retriever or EmbeddingRetriever()
     passages = list(retriever.search(question, k=k))
@@ -75,6 +78,11 @@ def answer(question: str, model=answer_llm, retriever: Retriever | None = None,
     if draft is None:
         return TurnResult(text=FALLBACK_ANSWER, passages=state.passages,
                           steps=state.steps, pending_action=state.pending_action,
+                          tool_events=state.tool_events)
+
+    if not check_grounding:
+        return TurnResult(text=draft, passages=state.passages, steps=state.steps,
+                          pending_action=state.pending_action, grounding="skipped",
                           tool_events=state.tool_events)
 
     outcome = grounding.check_and_retry(

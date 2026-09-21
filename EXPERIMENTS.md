@@ -159,6 +159,28 @@ This is a **targeted** check on the questions that had failed, so it is biased
 toward showing improvement. The full `report` and `tune` splits have not been
 rerun since; their numbers above predate the fix.
 
+## Voice pipeline (Day 3, Block 1)
+
+Built `backend/voice.py` and `POST /voice`: Gemini STT → answer loop → grounding
+check → Gemini TTS, streamed back as SSE sentence by sentence. Three configs
+share one code path: `sequential` (one TTS call for the whole answer), `stream`
+(one TTS call per sentence, the default), and `stream_nocheck` (stream with no
+grounding check, to measure what the check costs).
+
+- Speech runs on Gemini (`gemini-3.5-transcribe`, `gemini-3.1-flash-tts-preview`,
+  voice `charon`), not the local Whisper/Piper the plan sketched. Every stage of
+  a turn is therefore a network hop, so the "speech is local" latency win is
+  gone.
+- One end-to-end smoke run (`stream`, a mean-vs-median question, correctly cited
+  pages 12–17): STT 2.2 s, answer ready 31.4 s, first audio 44.8 s. The answer
+  and check dominate, and that time is almost all rate-limit waiting (14 RPM on
+  the answer model), not model time — the same story as the text evals.
+- TTS returns 24 kHz mono L16 PCM; `voice.py` wraps it in a WAV header so the
+  browser can play it. STT accepts `audio/wav`.
+
+The three-config latency comparison (20 questions × 5 runs) is Block 4, not run
+yet.
+
 ## Findings
 
 1. **Chunk boundaries decide both citations and hit rate.** Making chunks

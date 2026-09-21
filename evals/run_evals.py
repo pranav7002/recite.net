@@ -28,6 +28,8 @@ from backend.agent import answer
 from backend.llm import QuotaExhausted, answer_llm, check_llm
 from backend.retrieval.base import Passage, Retriever
 from backend.retrieval.embeddings import EmbeddingRetriever
+from backend.retrieval.rlm_arm import RLMRetriever
+from backend.retrieval.router import Router
 
 EVALS_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = EVALS_DIR / "results"
@@ -99,7 +101,11 @@ def load_cases(suite: str, split: str) -> list[dict]:
 def make_retriever(arm: str) -> Retriever:
     if arm == "embeddings":
         return EmbeddingRetriever()
-    raise SystemExit(f"arm '{arm}' is not built yet")
+    if arm == "rlm":
+        return RLMRetriever()
+    if arm == "router":
+        return Router()
+    raise SystemExit(f"unknown arm: {arm}")
 
 
 def read_outbox() -> list[dict]:

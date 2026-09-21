@@ -228,7 +228,10 @@ per day):
   is small. Reranking and the RLM arm cannot show a benefit until the suite has
   harder questions (paraphrases, exact terms, questions needing all of several
   pages, whole-lecture overviews, and unanswerable questions).
-- Only the embeddings arm exists (`rlm` and `router` are not built).
+- The `rlm` and `router` arms are built but the RLM arm cannot be driven by the
+  free-tier model: `gemini-3.1-flash-lite` plans and inspects the document but
+  never finalises a grounded answer through the `rlms` code-execution loop. See
+  the Day 3, Block 2 entry in [`EXPERIMENTS.md`](EXPERIMENTS.md).
 
 ## Running it
 

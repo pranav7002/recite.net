@@ -181,6 +181,32 @@ grounding check, to measure what the check costs).
 The three-config latency comparison (20 questions × 5 runs) is Block 4, not run
 yet.
 
+## RLM arm and router (Day 3, Block 2)
+
+Built `backend/retrieval/rlm_arm.py` (an adapter over the open-source `rlms`
+library) and `backend/retrieval/router.py`, and wired both into
+`evals/run_evals.py --arm rlm|router`.
+
+- The RLM's model calls route through `llm.answer_llm`, so the arm shares the
+  free-tier daily budget and the existing trace capture still splits model time
+  from rate-limit waits (the two latency columns the router reports).
+- No tools reach the RLM, so `email_summary` cannot be called from code running
+  over untrusted text — the lethal-trifecta mitigation, asserted by a unit test.
+  `local` REPL, `max_depth=2`, `max_iterations=15`.
+- `SCORE_THRESHOLD=0.5` is the router's initial weak-match threshold. It is a
+  placeholder; it must be tuned on the `tune` split (Block 4), never on `report`.
+
+**The arm runs, but the free-tier model cannot drive it.** One live run
+(mean-vs-median) took ~2 min and returned no passages: `gemini-3.1-flash-lite`
+produced a plan and `print(context[:1000])`-style inspection code, but never set
+`answer["ready"] = True` with a grounded answer, so the loop fell through 15
+iterations and the fallback prompt also yielded another plan. The `rlms`
+code-execution loop is designed for GPT-5/Claude-class models; Flash-Lite
+(chosen for its 500/day free quota) cannot reliably follow it, and full Flash is
+capped at 20/day, so there is no free-tier model that both drives the RLM and
+sustains an eval. The RLM arm is therefore built and honest, but expected to
+measure poorly until a stronger model is available.
+
 ## Findings
 
 1. **Chunk boundaries decide both citations and hit rate.** Making chunks

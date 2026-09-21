@@ -111,6 +111,38 @@ def get_chunks(doc_id: str) -> list:
     return [Chunk(id=r[0], doc_id=r[1], doc_name=r[2], page=r[3], section=r[4], text=r[5]) for r in rows]
 
 
+def get_doc_texts() -> list[dict]:
+    """Every document's full extracted text (with [[page N]] markers), for the
+    RLM arm which reads whole documents rather than chunk vectors."""
+    with _ambient() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT d.id, d.name, t.text
+            FROM documents d JOIN doc_text t ON t.doc_id = d.id
+            ORDER BY d.created_at
+            """,
+        )
+        return [{"doc_id": r[0], "name": r[1], "text": r[2]} for r in cur.fetchall()]
+
+
+def get_chunks_by_page(name: str, page: int) -> list:
+    """Chunks at a given page of a named document; maps an RLM citation back to
+    the exact text it relied on, so the grounding check still has real passages."""
+    from backend.ingest import Chunk
+
+    with _ambient() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.id, c.doc_id, d.name, c.page, c.section, c.text
+            FROM chunks c JOIN documents d ON d.id = c.doc_id
+            WHERE d.name = %s AND c.page = %s ORDER BY c.chunk_index
+            """,
+            (name, page),
+        )
+        rows = cur.fetchall()
+    return [Chunk(id=r[0], doc_id=r[1], doc_name=r[2], page=r[3], section=r[4], text=r[5]) for r in rows]
+
+
 def add(doc_id: str, name: str, full_text: str, chunks: list, vectors: np.ndarray) -> bool:
     """Insert a document atomically; returns False if it already existed
     (a concurrent upload of identical content won the insert)."""

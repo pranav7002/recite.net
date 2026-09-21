@@ -108,3 +108,14 @@ def test_blocked_send_creates_no_pending_row(db, monkeypatch):
     with db.cursor() as cur:
         cur.execute("SELECT count(*) FROM pending")
         assert cur.fetchone()[0] == 0
+
+
+def test_trace_capture_splits_wait_from_model_time():
+    from backend import trace
+
+    with trace.capture() as calls:
+        trace.record(model="m", wait_s=4.0, call_s=1.5)
+        trace.record(model="m", wait_s=0.5, call_s=2.0)
+    assert trace.timings(calls) == {"wait_s": 4.5, "model_s": 3.5, "calls": 2}
+    trace.record(model="m", wait_s=9, call_s=9)          # outside the block: not captured
+    assert len(calls) == 2

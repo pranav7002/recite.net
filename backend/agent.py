@@ -43,6 +43,7 @@ class TurnResult:
     retried: bool = False
     grounding: str = "supported"     # "supported" or "refused"
     tool_events: list[dict] = field(default_factory=list)
+    grounding_checks: list[dict] = field(default_factory=list)
 
 
 def answer(question: str, model=answer_llm, retriever: Retriever | None = None,
@@ -84,7 +85,7 @@ def answer(question: str, model=answer_llm, retriever: Retriever | None = None,
                       pending_action=state.pending_action,
                       retried=outcome.retried,
                       grounding="supported" if outcome.supported else "refused",
-                      tool_events=state.tool_events)
+                      tool_events=state.tool_events, grounding_checks=outcome.checks)
 
 
 def _build_messages(question: str, passages: list[Passage],

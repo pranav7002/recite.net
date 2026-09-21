@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pydantic import BaseModel, ValidationError
 
@@ -20,27 +20,46 @@ from backend.retrieval.base import Passage
 log = logging.getLogger("recite.grounding")
 
 CHECK_PROMPT = """\
-For each numbered claim, answer SUPPORTED, UNSUPPORTED or PARTIAL using only the \
-passages. Name the passage id you relied on. Return a single JSON object with a \
-"claims" array, one entry per claim, in order: {"claim": "...", "verdict": "...", \
-"passage_id": "..."}."""
+You check whether numbered claims are supported by the passages. For each claim \
+answer SUPPORTED, UNSUPPORTED or PARTIAL using only the passages. SUPPORTED means the \
+passages state it or it follows directly from them. Judge the claim, not any \
+citation such as "(notes.pdf, p. 3)" that appears in it. Name the passage id you \
+relied on.
 
-# A claim is a sentence ending in . ? or !, with a length floor so fragments
-# like "Yes." or "Here's why." are not checked as standalone claims.
-_SENTENCE = re.compile(r"(?<=[.?!])\s+")
-MIN_CLAIM_CHARS = 20
+Return one JSON object with a "claims" array containing exactly one entry per \
+numbered claim, using the claim's number as "id":
+{"claims": [{"id": 1, "verdict": "SUPPORTED", "passage_id": "abc:2"}, \
+{"id": 2, "verdict": "UNSUPPORTED", "passage_id": null}]}
+
+Example. Passage abc:2 says "The mean of 40, 50, 60 is 50." Claims: 1. The mean of \
+40, 50, 60 is 50. 2. The median is 60. Correct output: {"claims": [{"id": 1, \
+"verdict": "SUPPORTED", "passage_id": "abc:2"}, {"id": 2, "verdict": "UNSUPPORTED", \
+"passage_id": null}]}"""
+
+# A claim is a sentence ending in . ? or !, or a paragraph. A boundary needs a
+# capital letter, quote or bracket-free start next, so "p. 16)" does not split;
+# "(" is deliberately not a boundary, so a citation written after the full stop
+# stays with its sentence. Fragments of fewer than MIN_CLAIM_WORDS words ("Yes.",
+# "Here's why.") are filler: they are merged into a neighbouring claim, never
+# checked alone and never silently dropped with a real claim.
+_SENTENCE = re.compile(r"(?<=[.?!])\s+(?=[A-Z\"'\[$\\])|\n{2,}")
+_CITATION_ONLY = re.compile(r"^[(\[][^()\[\]]*[)\]]\.?$")
+MIN_CLAIM_WORDS = 3
 
 REFUSAL = "I couldn't find that in your notes."
 
 
 class ClaimVerdict(BaseModel):
-    claim: str
+    claim: str = ""
     verdict: str                      # SUPPORTED | UNSUPPORTED | PARTIAL
     passage_id: str | None = None
+    id: int | None = None             # the claim's number in the request
 
 
 class CheckResult(BaseModel):
     claims: list[ClaimVerdict]
+    raw: str = ""                     # the check model's raw output, for diagnosis
+    parse_failed: bool = False
 
     @property
     def all_supported(self) -> bool:
@@ -56,11 +75,33 @@ class GroundingOutcome:
     text: str
     retried: bool
     supported: bool
+    checks: list[dict] = field(default_factory=list)    # one entry per check call, for the eval traces
 
 
 def split_sentences(draft: str) -> list[str]:
-    """Split a draft into claims: sentences ending in . ? or !, above a length floor."""
-    return [p.strip() for p in _SENTENCE.split(draft.strip()) if len(p.strip()) >= MIN_CLAIM_CHARS]
+    """Split a draft into claims. A fragment that is only a citation is folded
+    into the sentence before it; filler fragments are merged into a neighbour,
+    so a short factual sentence ("The median is 60.") is still checked."""
+    parts = [p.strip() for p in _SENTENCE.split(draft.strip()) if p.strip()]
+    sentences: list[str] = []
+    for part in parts:
+        if sentences and _CITATION_ONLY.match(part):
+            sentences[-1] += " " + part
+        else:
+            sentences.append(part)
+
+    claims: list[str] = []
+    leading = ""                                  # filler waiting for the next claim
+    for sentence in sentences:
+        if len(sentence.split()) < MIN_CLAIM_WORDS:
+            if claims:
+                claims[-1] += " " + sentence
+            else:
+                leading = f"{leading} {sentence}".strip()
+            continue
+        claims.append(f"{leading} {sentence}".strip() if leading else sentence)
+        leading = ""
+    return claims
 
 
 def check_messages(claims: list[str], passages: list[Passage]) -> list[dict]:
@@ -78,15 +119,18 @@ def check(draft: str, passages: list[Passage], llm_small) -> CheckResult:
     if not claims:
         return CheckResult(claims=[])
     messages = check_messages(claims, passages)
+    raw = ""
     for attempt in range(2):
         raw = _ask(llm_small, messages)
         result = _parse(raw, claims)
         if result is not None:
+            result.raw = raw
             return result
         log.warning("grounding check returned unparseable JSON (attempt %d)", attempt + 1)
-        log.debug("unparseable grounding output: %r", raw[:500])
     log.warning("grounding check failed to parse twice; treating answer as unsupported")
-    return _unsupported(claims)
+    unsupported = _unsupported(claims)
+    unsupported.raw, unsupported.parse_failed = raw, True
+    return unsupported
 
 
 def check_and_retry(draft: str, state, messages: list[dict], llm, llm_small,
@@ -99,9 +143,11 @@ def check_and_retry(draft: str, state, messages: list[dict], llm, llm_small,
     if draft.strip() == REFUSAL:
         return GroundingOutcome(text=REFUSAL, retried=False, supported=True)
 
+    checks: list[dict] = []
     result = check(draft, state.passages, llm_small)
+    checks.append(_trace(draft, result))
     if result.all_supported:
-        return GroundingOutcome(text=draft, retried=False, supported=True)
+        return GroundingOutcome(text=draft, retried=False, supported=True, checks=checks)
 
     state.retried = True
     log.info("grounding check failed; retrying once (failing: %r)", result.failing)
@@ -111,14 +157,23 @@ def check_and_retry(draft: str, state, messages: list[dict], llm, llm_small,
 
     redraft = step()
     if redraft is None:
-        return GroundingOutcome(text=refuse(result.failing), retried=True, supported=False)
+        return GroundingOutcome(text=refuse(result.failing), retried=True, supported=False, checks=checks)
 
     result2 = check(redraft, state.passages, llm_small)
+    checks.append(_trace(redraft, result2))
     fixed = result2.all_supported
     log.info("grounding retry %s", "fixed the answer" if fixed else "did not fix the answer")
     if fixed:
-        return GroundingOutcome(text=redraft, retried=True, supported=True)
-    return GroundingOutcome(text=refuse(result2.failing), retried=True, supported=False)
+        return GroundingOutcome(text=redraft, retried=True, supported=True, checks=checks)
+    return GroundingOutcome(text=refuse(result2.failing), retried=True, supported=False, checks=checks)
+
+
+def _trace(draft: str, result: CheckResult) -> dict:
+    """What one check call decided, kept in the eval records so a refused
+    answer can be traced to the claim (or parse failure) that caused it."""
+    return {"draft": draft, "parse_failed": result.parse_failed, "raw": result.raw,
+            "verdicts": [{"claim": c.claim, "verdict": c.verdict, "passage_id": c.passage_id}
+                         for c in result.claims]}
 
 
 def refuse(failing: list[str]) -> str:
@@ -145,15 +200,23 @@ def _extract_json(text: str) -> str:
 
 
 def _parse(text: str, claims: list[str]) -> CheckResult | None:
+    """Match verdicts to claims by the numbered id the model echoes back, so a
+    reordered or re-split answer still lines up; without ids, by position."""
     try:
         result = CheckResult.model_validate_json(_extract_json(text))
     except ValidationError:
         return None
-    if len(result.claims) != len(claims):
+    parsed = result.claims
+    if parsed and all(p.id is not None for p in parsed):
+        by_id = {p.id: p for p in parsed}
+        if set(by_id) != set(range(1, len(claims) + 1)):
+            return None                       # a claim is missing or invented
+        parsed = [by_id[i] for i in range(1, len(claims) + 1)]
+    elif len(parsed) != len(claims):
         return None
-    for original, parsed in zip(claims, result.claims, strict=True):
-        parsed.claim = original             # keep our wording for the retry message
-    return result
+    for original, verdict in zip(claims, parsed, strict=True):
+        verdict.claim = original              # keep our wording for the retry message
+    return CheckResult(claims=parsed)
 
 
 def _unsupported(claims: list[str]) -> CheckResult:

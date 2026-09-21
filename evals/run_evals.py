@@ -23,7 +23,7 @@ import yaml
 from openai import OpenAIError
 from pydantic import BaseModel, ValidationError
 
-from backend import guardrails, ingest, store, tools
+from backend import guardrails, ingest, store, tools, trace
 from backend.agent import answer
 from backend.llm import QuotaExhausted, answer_llm, check_llm
 from backend.retrieval.base import Passage, Retriever
@@ -54,6 +54,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--arm", choices=["embeddings", "rlm", "router"], default="embeddings")
     p.add_argument("--runs", type=int, default=3)
     p.add_argument("--split", choices=["tune", "report", "heldout"], default="report")
+    p.add_argument("--only", default="", help="comma-separated case ids to run (default: all in the split)")
+    p.add_argument("--fresh", action="store_true", help="ignore today's earlier results instead of resuming")
     return p.parse_args(argv)
 
 
@@ -149,7 +151,8 @@ def judge(question: str, expected: str, actual: str) -> str:
 def run_retrieval_case(case: dict, retriever: Retriever, run: int) -> dict:
     reset_state()
     started = time.monotonic()
-    result = answer(case["question"], model=answer_llm, retriever=retriever)
+    with trace.capture() as calls:
+        result = answer(case["question"], model=answer_llm, retriever=retriever)
     elapsed = time.monotonic() - started
     grade = judge(case["question"], case.get("expected_answer", ""), result.text)
     return {
@@ -157,10 +160,10 @@ def run_retrieval_case(case: dict, retriever: Retriever, run: int) -> dict:
         "hit": hit(case.get("expected_pages", []), result.passages),
         "grade": grade, "steps": result.steps,
         "passages": len(result.passages), "grounding": result.grounding,
-        "retried": result.retried, "total_s": round(elapsed, 3),
+        "retried": result.retried, "total_s": round(elapsed, 3), **trace.timings(calls),
         "answer": result.text, "expected_pages": case.get("expected_pages", []),
         "retrieved": [{"doc": p.doc_name, "page": p.page} for p in result.passages],
-        "tool_events": result.tool_events,
+        "tool_events": result.tool_events, "grounding_checks": result.grounding_checks,
     }
 
 
@@ -177,7 +180,8 @@ def confirm_writes_outbox(pending_action: dict | None) -> bool:
 def run_safety_case(case: dict, retriever: Retriever, run: int) -> dict:
     reset_state()
     started = time.monotonic()
-    result = answer(case["question"], model=answer_llm, retriever=retriever)
+    with trace.capture() as calls:
+        result = answer(case["question"], model=answer_llm, retriever=retriever)
     elapsed = time.monotonic() - started
     ctype = case["type"]
     if ctype == "injection":
@@ -189,8 +193,9 @@ def run_safety_case(case: dict, retriever: Retriever, run: int) -> dict:
     else:
         raise SystemExit(f"unknown safety case type: {ctype}")
     return {"id": case["id"], "run": run, "type": ctype, "passed": passed,
-            "total_s": round(elapsed, 3), "answer": result.text,
-            "tool_events": result.tool_events, "blocked": result.text.startswith("I didn't send"),
+            "total_s": round(elapsed, 3), **trace.timings(calls), "answer": result.text,
+            "tool_events": result.tool_events, "grounding_checks": result.grounding_checks,
+            "blocked": result.text.startswith("I didn't send"),
             "pending": result.pending_action is not None}
 
 
@@ -232,6 +237,27 @@ def _pct(n: int, d: int) -> str:
     return f"{n / d:.0%}" if d else "—"
 
 
+def _percentile(values: list[float], q: float) -> float:
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
+
+
+def _latency_lines(records: list[dict]) -> list[str]:
+    """Model time is what the system costs; wall-clock also includes waiting on
+    the free-tier rate limiter, so the two are reported separately."""
+    timed = [r for r in records if "model_s" in r]
+    if not timed:
+        return [f"- wall-clock (s): max {max(r['total_s'] for r in records):.1f} (no model/wait split recorded)"]
+    model = [r["model_s"] for r in timed]
+    wait = [r["wait_s"] for r in timed]
+    wall = [r["total_s"] for r in timed]
+    return [
+        f"- model time per answer (s): p50 {_percentile(model, 0.5):.1f}, p95 {_percentile(model, 0.95):.1f}",
+        f"- rate-limit wait per answer (s): p50 {_percentile(wait, 0.5):.1f}, p95 {_percentile(wait, 0.95):.1f}",
+        f"- wall-clock per answer (s): p50 {_percentile(wall, 0.5):.1f}, p95 {_percentile(wall, 0.95):.1f}",
+    ]
+
+
 def _retrieval_md(records: list[dict]) -> str:
     if not records:
         return "no runs completed\n"
@@ -256,8 +282,7 @@ def _retrieval_md(records: list[dict]) -> str:
     c = Counter(r["grade"] for r in records)
     lines.append(f"- hit rate: {_pct(hits, len(records))}")
     lines.append(f"- correct: {_pct(c['correct'], len(records))}")
-    lines.append(f"- latency (s): min {min(r['total_s'] for r in records):.1f}, "
-                 f"max {max(r['total_s'] for r in records):.1f}")
+    lines += _latency_lines(records)
     lines += ["", "## Consistency (per question, across runs)", ""]
     always = sum(all(r["hit"] for r in rs) for rs in by_id.values())
     sometimes = sum(any(r["hit"] for r in rs) and not all(r["hit"] for r in rs) for rs in by_id.values())
@@ -300,11 +325,14 @@ def write_results(suite: str, arm: str, split: str, records: list[dict]) -> None
 def main(argv=None) -> int:
     args = parse_args(argv)
     cases = load_cases(args.suite, args.split)
+    if args.only:
+        wanted = {c.strip() for c in args.only.split(",") if c.strip()}
+        cases = [c for c in cases if c["id"] in wanted]
     if not cases:
         print(f"no {args.suite} cases for split={args.split}; nothing to run")
         return 0
     retriever = make_retriever(args.arm)
-    prior = _load_today(args.suite, args.arm, args.split)
+    prior = [] if args.fresh else _load_today(args.suite, args.arm, args.split)
     done = {(r["id"], r["run"]) for r in prior}
 
     if args.suite == "safety":

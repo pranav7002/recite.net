@@ -1,10 +1,13 @@
 """RLM arm and router tests.
 
 The RLM itself is faked (its model calls go to Gemini), so no test hits the
-network. The router is tested with faked embedding and RLM retrievers.
+network. The router is tested with faked embedding and RLM retrievers. The
+sandbox tests exercise the real (sandboxed) REPL, since that is the mechanism
+under test.
 """
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 from backend import store
@@ -21,7 +24,7 @@ def test_rlm_config_has_no_tools():
     assert "custom_sub_tools" not in kwargs
     assert kwargs["max_depth"] == 2
     assert kwargs["max_iterations"] == 15
-    assert kwargs["environment"] == "local"
+    assert kwargs["environment"] == "recite-sandbox"
 
 
 def _fake_rlm(response):
@@ -89,3 +92,35 @@ def test_router_returns_embeddings_when_strong():
     rlm = type("R", (), {"search": lambda self, q, k=5: _passages([{"id": "r1", "doc": "rlm.pdf", "score": 0.0}])})()
     router_ = router.Router(embeddings=emb, rlm=rlm, score_threshold=0.5)
     assert [p.doc_name for p in router_.search("q")] == ["notes.pdf"]
+
+
+def test_router_falls_back_to_embeddings_when_rlm_empty():
+    emb = type("R", (), {"search": lambda self, q, k=5: _passages([{"id": "p1", "score": 0.1}])})()
+    rlm = type("R", (), {"search": lambda self, q, k=5: []})()
+    router_ = router.Router(embeddings=emb, rlm=rlm, score_threshold=0.5)
+    assert [p.id for p in router_.search("q")] == ["p1"]
+
+
+def test_sandbox_blocks_env_read():
+    """The attack the user cares about: code over untrusted text tries to read
+    .env and put it in the answer. `open` is stripped, so the key never leaks."""
+    repl = rlm_arm.make_sandboxed_repl()
+    try:
+        result = repl.execute_code("answer['content'] = open('.env').read(); answer['ready'] = True")
+        key = os.getenv("GEMINI_API_KEY")
+        assert key, "GEMINI_API_KEY must be set for this test"
+        assert key not in result.stdout and key not in result.stderr
+        assert result.final_answer is None          # open() raised before ready was set
+        assert "NameError" in result.stderr
+    finally:
+        repl.cleanup()
+
+
+def test_sandbox_blocks_import():
+    repl = rlm_arm.make_sandboxed_repl()
+    try:
+        result = repl.execute_code("import os\nanswer['content'] = os.getcwd()")
+        assert "Error" in result.stderr or "NameError" in result.stderr
+        assert result.final_answer is None
+    finally:
+        repl.cleanup()

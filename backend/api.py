@@ -7,8 +7,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
+import re
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -16,15 +20,41 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from backend import guardrails, ingest, store, tools, voice
+from backend import guardrails, ingest, quiz, store, tools, voice
 from backend.agent import answer
 from backend.citations import CITE
 from backend.llm import QuotaExhausted
 
-app = FastAPI(title="recite.net")
+log = logging.getLogger("recite.api")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Warm the local speech models at startup so the first voice turn does not
+    pay model loading. Skipped for SPEECH=gemini or WARM_SPEECH=0 (tests)."""
+    if voice.SPEECH == "local" and os.getenv("WARM_SPEECH", "1") != "0":
+        try:
+            from backend import speech
+            started = time.monotonic()
+            speech.warm()
+            log.info("speech models warm in %.1fs", time.monotonic() - started)
+        except Exception as e:  # noqa: BLE001 — text endpoints must still start
+            log.warning("could not warm speech models: %s", e)
+    yield
+
+
+app = FastAPI(title="recite.net", lifespan=lifespan)
 
 _sessions: dict[str, list[dict]] = {}
 _sessions_lock = threading.Lock()
+
+# The pending action each voice session is waiting on, so a spoken "confirm" or
+# "cancel" can be resolved in code. The pending table still enforces
+# single execution and the 10-minute expiry.
+_voice_pending: dict[str, str] = {}
+
+CONFIRM_PHRASES = {"confirm", "confirm it", "yes confirm", "confirm send"}
+CANCEL_PHRASES = {"cancel", "cancel it", "no cancel", "dont send", "do not send"}
 
 ALLOWED_SUFFIXES = {".pdf", ".txt", ".md"}
 MAX_UPLOAD_BYTES = 25_000_000
@@ -92,13 +122,93 @@ async def voice_turn(
             _sessions.setdefault(session_id, []).append(
                 {"question": question, "answer": answer_text})
 
-    gen = voice.voice_turn(audio, history, t0, config, record=record)
+    def remember_pending(action: dict) -> None:
+        with _sessions_lock:
+            _voice_pending[session_id] = action["id"]
+
+    def intercept(transcript: str) -> str | None:
+        command = spoken_command(transcript)
+        if command is None:
+            return None
+        with _sessions_lock:
+            pid = _voice_pending.pop(session_id, None)
+        if pid is None:
+            return "There's nothing waiting for confirmation."
+        if command == "cancel":
+            store.cancel_pending(pid)
+            return "Cancelled. Nothing was sent."
+        try:
+            outcome = execute_confirm(pid)
+        except ConfirmError as e:
+            return e.spoken
+        return f"Done. The summary for {outcome['args']['to']} is queued."
+
+    gen = voice.voice_turn(audio, history, t0, config, record=record,
+                           pending=remember_pending, intercept=intercept)
     return StreamingResponse(_sse(gen), media_type="text/event-stream")
 
 
 async def _sse(gen):
     async for item in gen:
         yield f"data: {json.dumps(item, default=str)}\n\n"
+
+
+class QuizNextRequest(BaseModel):
+    unit: str = Field(min_length=1, max_length=100)
+
+
+class QuizAnswerRequest(BaseModel):
+    chunk_id: str = Field(min_length=1, max_length=100)
+    answer: str = Field(min_length=1, max_length=5000)
+    question: str = Field(default="", max_length=1000)
+
+
+@app.post("/quiz/next")
+def quiz_next(req: QuizNextRequest) -> dict:
+    try:
+        item = quiz.next_question(req.unit)
+    except quiz.UnknownUnit:
+        raise HTTPException(status_code=404, detail=f"No document with id {req.unit!r}.")
+    except QuotaExhausted as e:
+        raise HTTPException(status_code=429, detail=str(e)) from e
+    return {"chunk_id": item.chunk_id, "question": item.question,
+            "doc": item.passage.doc_name, "page": item.passage.page}
+
+
+@app.post("/quiz/answer")
+def quiz_answer(req: QuizAnswerRequest) -> dict:
+    try:
+        item = quiz.item_from(req.chunk_id, req.question)
+    except quiz.UnknownUnit:
+        raise HTTPException(status_code=404, detail=f"No passage with id {req.chunk_id!r}.")
+    try:
+        result = quiz.grade(item, req.answer)
+    except QuotaExhausted as e:
+        raise HTTPException(status_code=429, detail=str(e)) from e
+    return {"grade": result.grade, "missing": result.missing,
+            "doc": item.passage.doc_name, "page": item.passage.page}
+
+
+@app.post("/quiz/answer_voice")
+def quiz_answer_voice(
+    file: Annotated[UploadFile, File()],
+    chunk_id: Annotated[str, Form(min_length=1, max_length=100)],
+    question: Annotated[str, Form(max_length=1000)] = "",
+) -> dict:
+    """Spoken quiz answer: transcribe with the same STT as /voice, then grade."""
+    try:
+        item = quiz.item_from(chunk_id, question)
+    except quiz.UnknownUnit:
+        raise HTTPException(status_code=404, detail=f"No passage with id {chunk_id!r}.")
+    transcript = voice.stt(file.file.read()).strip()
+    if not transcript:
+        raise HTTPException(status_code=422, detail="I didn't hear an answer. Try again.")
+    try:
+        result = quiz.grade(item, transcript)
+    except QuotaExhausted as e:
+        raise HTTPException(status_code=429, detail=str(e)) from e
+    return {"transcript": transcript, "grade": result.grade, "missing": result.missing,
+            "doc": item.passage.doc_name, "page": item.passage.page}
 
 
 @app.post("/documents")
@@ -139,22 +249,51 @@ def delete_document(doc_id: str) -> dict:
     return {"status": "deleted", "doc_id": doc_id}
 
 
-@app.post("/confirm/{pid}")
-def confirm(pid: str) -> dict:
+def spoken_command(transcript: str) -> str | None:
+    """'confirm' or 'cancel' when the whole utterance is one of the fixed
+    phrases, else None. Exact match after normalising case and punctuation, so
+    "confirm the mean is 50" is a question, not a confirmation."""
+    words = " ".join(re.sub(r"[^a-z ]", "", transcript.lower().replace("'", "")).split())
+    if words in CONFIRM_PHRASES:
+        return "confirm"
+    if words in CANCEL_PHRASES:
+        return "cancel"
+    return None
+
+
+class ConfirmError(Exception):
+    def __init__(self, status: int, detail: str, spoken: str) -> None:
+        super().__init__(detail)
+        self.status, self.detail, self.spoken = status, detail, spoken
+
+
+def execute_confirm(pid: str) -> dict:
+    """Run a pending action once. Shared by POST /confirm and spoken "confirm"."""
     row = store.confirm_pending(pid)
     if row is None:
-        raise HTTPException(status_code=409,
-                            detail="Nothing to confirm: already handled, cancelled, or expired.")
+        raise ConfirmError(409, "Nothing to confirm: already handled, cancelled, or expired.",
+                           "That request expired or was already handled, so nothing was sent.")
     tool_name, args = row
     if tool_name == "email_summary" and args["to"].lower() not in guardrails.CONTACTS:
         store.mark_pending(pid, "cancelled")
-        raise HTTPException(status_code=409, detail="Recipient is no longer in your study group.")
+        raise ConfirmError(409, "Recipient is no longer in your study group.",
+                           "That recipient is no longer in your study group, so nothing was sent.")
     try:
         result = tools.run_tool(tool_name, args)
     except Exception:  # noqa: BLE001 — a failed write must not leave the action marked executed
         store.mark_pending(pid, "failed")
-        raise HTTPException(status_code=500, detail="Action failed; nothing was sent.")
-    return {"status": "executed", "tool": tool_name, "result": result}
+        raise ConfirmError(500, "Action failed; nothing was sent.",
+                           "Sending failed, so nothing was sent.")
+    return {"status": "executed", "tool": tool_name, "args": args, "result": result}
+
+
+@app.post("/confirm/{pid}")
+def confirm(pid: str) -> dict:
+    try:
+        outcome = execute_confirm(pid)
+    except ConfirmError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
+    return {"status": outcome["status"], "tool": outcome["tool"], "result": outcome["result"]}
 
 
 @app.post("/cancel/{pid}")

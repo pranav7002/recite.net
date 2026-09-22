@@ -143,6 +143,45 @@ def get_chunks_by_page(name: str, page: int) -> list:
     return [Chunk(id=r[0], doc_id=r[1], doc_name=r[2], page=r[3], section=r[4], text=r[5]) for r in rows]
 
 
+def get_chunk(chunk_id: str):
+    """Fetch one chunk by id (quiz mode looks a passage up from its id)."""
+    from backend.ingest import Chunk
+
+    with _ambient() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.id, c.doc_id, d.name, c.page, c.section, c.text
+            FROM chunks c JOIN documents d ON d.id = c.doc_id
+            WHERE c.id = %s
+            """,
+            (chunk_id,),
+        )
+        r = cur.fetchone()
+    return None if r is None else Chunk(id=r[0], doc_id=r[1], doc_name=r[2], page=r[3], section=r[4], text=r[5])
+
+
+def quiz_missed_chunk_ids() -> set[str]:
+    """Chunk ids answered wrongly at least once, so pick_passage can weight them."""
+    with _ambient() as conn, conn.cursor() as cur:
+        cur.execute("SELECT chunk_id FROM quiz_misses")
+        return {r[0] for r in cur.fetchall()}
+
+
+def record_quiz_miss(chunk_id: str) -> None:
+    """Record a missed chunk; ON CONFLICT DO NOTHING so a chunk is tracked once."""
+    with _ambient() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO quiz_misses (chunk_id) VALUES (%s) ON CONFLICT (chunk_id) DO NOTHING",
+            (chunk_id,),
+        )
+
+
+def clear_quiz_miss(chunk_id: str) -> None:
+    """Forget a miss once the student answers that passage correctly."""
+    with _ambient() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM quiz_misses WHERE chunk_id = %s", (chunk_id,))
+
+
 def add(doc_id: str, name: str, full_text: str, chunks: list, vectors: np.ndarray) -> bool:
     """Insert a document atomically; returns False if it already existed
     (a concurrent upload of identical content won the insert)."""

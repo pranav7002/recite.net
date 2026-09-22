@@ -1,24 +1,29 @@
 """The recursive-language-model retrieval arm.
 
-RLMs (Zhang, Kraska, Khattab 2025) put the whole document in a sandboxed REPL
-as a variable and let the model write code to navigate it, calling itself
-recursively on the slices it selects. This arm adapts the open-source ``rlms``
-library to the same Gemini endpoint, so uploaded documents work immediately and
-citations still map back to pages.
+RLMs (Zhang, Kraska, Khattab 2025) put the whole document in a REPL as a
+variable and let the model write code to navigate it, calling itself recursively
+on the slices it selects. This arm adapts the open-source ``rlms`` library to
+the same Gemini endpoint, so uploaded documents work immediately and citations
+still map back to pages.
 
 Two design choices matter:
 
 - **No tools.** Neither the RLM nor its sub-calls get any tool, so the mutating
   ``email_summary`` cannot be reached from code running over untrusted document
-  text — this breaks the "lethal trifecta" by construction.
+  text.
 - **Every model call routes through ``llm.answer_llm``.** The ``rlms`` client is
   replaced with one that delegates to the rate-limited client, so the RLM shares
   the free-tier daily budget and the existing trace capture still splits model
-  time from limiter waits (the two latency columns the router reports).
+  time from limiter waits.
 
-The ``local`` environment blocks ``eval``/``exec``/``compile`` but still exposes
-``__import__`` and ``open``, so it is not a hard sandbox against a determined
-escape; a production build would use the Docker environment.
+The REPL is a **partial sandbox**: ``open``, ``__import__`` and the common
+escape primitives (``getattr``, ``type``, ``object``, ``super``, …) are stripped
+from the builtins and the document is injected directly rather than read back
+with ``open``. This stops the naive ``open('.env').read()`` and ``import os``,
+but Python-level escapes such as ``().__class__.__subclasses__()`` still reach
+the host, so it is not a hard sandbox. The Docker environment would be one, but
+it needs a writable mount and a host proxy, so ``--network none`` is not
+available through the library as shipped.
 """
 from __future__ import annotations
 
@@ -32,8 +37,16 @@ from backend.citations import CITE
 from backend.retrieval.base import Passage
 
 BACKEND_NAME = "recite-gemini"
+SANDBOX_ENV_NAME = "recite-sandbox"
 MAX_DEPTH = 2
 MAX_ITERATIONS = 15
+
+# Builtins removed from the REPL namespace: the file and import primitives, plus
+# the common introspection primitives used to reach them (object.__subclasses__).
+_STRIP_BUILTINS = frozenset({
+    "open", "__import__", "getattr", "setattr", "delattr", "vars", "dir",
+    "type", "object", "super", "property", "staticmethod", "classmethod",
+})
 
 # "(name, p. 14, 17)" — multi-page aware, unlike the single-page CITE regex.
 _CITE_MULTI = re.compile(r"\(([^,()]+),\s*p\.\s*([\d,\s]+)\)")
@@ -85,6 +98,70 @@ def _install_backend() -> None:
     rlm_core._recite_backend_installed = True
 
 
+def _sandboxed_repl_class():
+    """A LocalREPL with dangerous builtins stripped and the context injected
+    directly (no ``open``), so code over untrusted text cannot read ``.env`` or
+    import modules. This is a partial sandbox, not a hard one."""
+    from rlm.environments.base_env import extract_tool_value
+    from rlm.environments.local_repl import _SAFE_BUILTINS, LocalREPL, _AnswerDict
+
+    restricted = {k: v for k, v in _SAFE_BUILTINS.items() if k not in _STRIP_BUILTINS}
+
+    class SandboxedREPL(LocalREPL):
+        def setup(self):
+            self.globals = {"__builtins__": restricted.copy(), "__name__": "__main__"}
+            self.locals = {}
+            self._pending_llm_calls = []
+            self._last_final_answer = None
+            self.globals["SHOW_VARS"] = self._show_vars
+            self.globals["llm_query"] = self._llm_query
+            self.globals["llm_query_batched"] = self._llm_query_batched
+            self.globals["rlm_query"] = self._rlm_query
+            self.globals["rlm_query_batched"] = self._rlm_query_batched
+            self.locals["answer"] = _AnswerDict(on_ready=self._capture_answer)
+            for name, entry in (self.custom_tools or {}).items():
+                value = extract_tool_value(entry)
+                if callable(value):
+                    self.globals[name] = value
+                else:
+                    self.locals[name] = value
+
+        def add_context(self, context_payload, context_index=None):
+            if context_index is None:
+                context_index = self._context_count
+            var_name = f"context_{context_index}"
+            self.locals[var_name] = context_payload
+            if context_index == 0:
+                self.locals["context"] = context_payload
+            self._context_count = max(self._context_count, context_index + 1)
+            return context_index
+
+    return SandboxedREPL
+
+
+def make_sandboxed_repl(**kwargs):
+    """Build the sandboxed REPL directly, for tests and the attack case."""
+    return _sandboxed_repl_class()(**kwargs)
+
+
+def _install_environment() -> None:
+    """Route the custom environment name to the sandboxed REPL, once."""
+    import rlm.core.rlm as rlm_core
+
+    if getattr(rlm_core, "_recite_env_installed", False):
+        return
+    repl_class = _sandboxed_repl_class()
+    original = rlm_core.get_environment
+
+    def get_environment(environment, environment_kwargs):
+        if environment == SANDBOX_ENV_NAME:
+            return repl_class(**environment_kwargs)
+        return original(environment, environment_kwargs)
+
+    rlm_core.get_environment = get_environment
+    rlm_core._recite_env_installed = True
+
+
 def rlm_kwargs() -> dict:
     """The RLM configuration. custom_tools is deliberately absent — neither the
     RLM nor its sub-calls get any tool, so email_summary cannot be reached from
@@ -92,7 +169,7 @@ def rlm_kwargs() -> dict:
     return {
         "backend": BACKEND_NAME,
         "backend_kwargs": {"model_name": llm.answer_llm.model},
-        "environment": "local",
+        "environment": SANDBOX_ENV_NAME,
         "max_depth": MAX_DEPTH,
         "max_iterations": MAX_ITERATIONS,
     }
@@ -103,6 +180,7 @@ def make_rlm():
     from rlm import RLM
 
     _install_backend()
+    _install_environment()
     return RLM(**rlm_kwargs())
 
 

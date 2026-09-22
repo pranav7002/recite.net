@@ -1,10 +1,9 @@
-"""Cascaded voice pipeline: Gemini speech-to-text and text-to-speech around the
-existing answer loop.
+"""Cascaded voice pipeline: STT → answer loop → grounding → TTS, streamed back
+sentence by sentence.
 
-STT, the answer and TTS are blocking network calls, so the turn is an async
-generator that offloads each stage to a worker thread and streams audio back
-sentence by sentence. The headline metric is time-to-first-audio: the first
-sentence is synthesised while the rest of the answer is still being produced.
+Speech runs **locally** (faster-whisper + Piper) by default, so no audio leaves
+the machine and the only network hops in a turn are the model calls. Set
+``SPEECH=gemini`` to use Gemini STT/TTS instead (for a comparison row).
 
 Three configurations, selected by `config`, share one code path:
 
@@ -18,21 +17,41 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import os
 import re
 import time
 import wave
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 
-from backend import agent, llm
+from dotenv import load_dotenv
+
+from backend import agent, llm, speech
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # A sentence boundary needs a capital letter (or quote/bracket) to follow, so
 # a full stop inside a citation such as "(notes.pdf, p. 3)" never splits — the
 # same lesson as the grounding claim splitter (iteration 8 in the README).
 SENTENCE_END = re.compile(r"(?<=[.?!])\s+(?=[A-Z\"'\[$\\])|\n{2,}")
 
-TTS_SAMPLE_WIDTH = 2        # Gemini TTS returns L16: 16-bit PCM
-TTS_CHANNELS = 1            # mono
+TTS_SAMPLE_WIDTH = 2        # 16-bit PCM, mono
+TTS_CHANNELS = 1
 VALID_CONFIGS = ("sequential", "stream", "stream_nocheck")
+
+SPEECH = os.getenv("SPEECH", "local")   # "local" (faster-whisper + Piper) | "gemini"
+
+
+def stt(audio: bytes) -> str:
+    if SPEECH == "gemini":
+        return llm.transcribe(audio)
+    return speech.transcribe(audio)
+
+
+def tts(text: str) -> tuple[bytes, int]:
+    if SPEECH == "gemini":
+        return llm.synthesize(text)
+    return speech.synthesize(text)
 
 
 def split_sentences(text: str) -> list[str]:
@@ -52,23 +71,39 @@ def _pcm_to_wav(pcm: bytes, rate: int) -> bytes:
     return buf.getvalue()
 
 
+async def spoken_reply(reply_text: str, t0: float, tts_fn: Callable[[str], tuple[bytes, int]] = tts) -> AsyncIterator[dict]:
+    """Speak a short, fixed reply (used for confirm/cancel and empty audio)."""
+    pcm, rate = await asyncio.to_thread(tts_fn, reply_text)
+    yield {"seq": 0, "mime_type": "audio/wav",
+           "audio_b64": base64.b64encode(_pcm_to_wav(pcm, rate)).decode(),
+           "text": reply_text}
+    yield {"done": True, "marks": {"t0_ms": t0}, "trace": {"config": "reply"}}
+
+
 async def voice_turn(
     audio: bytes,
     history: list[dict] | None,
     t0: float,
     config: str = "stream",
     *,
-    stt: Callable[[bytes], str] = llm.transcribe,
-    tts: Callable[[str], tuple[bytes, int]] = llm.synthesize,
+    text: str | None = None,
+    stt: Callable[[bytes], str] = stt,
+    tts: Callable[[str], tuple[bytes, int]] = tts,
     answer: Callable[..., agent.TurnResult] = agent.answer,
     record: Callable[[str, str], None] | None = None,
+    pending: Callable[[dict], None] | None = None,
+    intercept: Callable[[str], str | None] | None = None,
 ) -> AsyncIterator[dict]:
     """Run one spoken turn, yielding SSE-ready dicts.
 
     t0 is the browser's timestamp of the last audio frame (ms). All stage marks
     are server times relative to request arrival; the browser measures the true
-    time-to-first-audio from t0. `record`, when given, is called with the
-    (question, answer) pair so the caller can update session history.
+    time-to-first-audio from t0. `record` is called with (question, answer);
+    `pending` is called with the pending_action dict when the turn pauses for a
+    confirmation, so the caller can remember it for a spoken "confirm"/"cancel".
+    `intercept` sees the transcript before the answer loop; if it returns a
+    reply, that reply is spoken and the turn ends without a model call (used
+    for spoken confirm/cancel, which must be decided in code, not by a model).
     """
     if config not in VALID_CONFIGS:
         raise ValueError(f"unknown voice config {config!r}; expected one of {VALID_CONFIGS}")
@@ -76,14 +111,34 @@ async def voice_turn(
     arrival = time.monotonic()
     marks: dict[str, float] = {"t0_ms": t0}
 
-    text = await asyncio.to_thread(stt, audio)
+    transcript = (text if text is not None else await asyncio.to_thread(stt, audio)).strip()
     marks["stt_ms"] = round((time.monotonic() - arrival) * 1000, 1)
 
-    result = await asyncio.to_thread(answer, text, history=history,
+    # A blank or silent recording: return without spending a model call.
+    if not transcript:
+        yield {"done": True, "marks": marks, "text": "I didn't hear anything. Try again.",
+               "trace": {"config": config, "empty": True}}
+        return
+
+    if intercept is not None:
+        reply = await asyncio.to_thread(intercept, transcript)
+        if reply is not None:
+            pcm, rate = await asyncio.to_thread(tts, reply)
+            marks["first_audio_ms"] = round((time.monotonic() - arrival) * 1000, 1)
+            yield {"seq": 0, "mime_type": "audio/wav",
+                   "audio_b64": base64.b64encode(_pcm_to_wav(pcm, rate)).decode(),
+                   "text": reply}
+            yield {"done": True, "marks": marks,
+                   "trace": {"config": config, "intercepted": True, "transcript": transcript}}
+            return
+
+    result = await asyncio.to_thread(answer, transcript, history=history,
                                      check_grounding=config != "stream_nocheck")
     marks["answer_ready_ms"] = round((time.monotonic() - arrival) * 1000, 1)
     if record is not None:
-        record(text, result.text)
+        record(transcript, result.text)
+    if pending is not None and result.pending_action is not None:
+        pending(result.pending_action)
 
     if config == "sequential":
         pcm, rate = await asyncio.to_thread(tts, result.text)

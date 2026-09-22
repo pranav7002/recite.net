@@ -1,17 +1,20 @@
-"""The router: try embeddings first, escalate to the RLM arm only when fixed
-rules say the cheap result looks weak.
+"""The router: try embeddings first, escalate to the RLM arm only when a fixed
+rule says the cheap result looks weak, and fall back to embeddings when the RLM
+arm comes back empty (so escalation never makes an answer worse).
 
-Three triggers, from the architecture guide (section 10):
+Two triggers:
 
 1. The top embedding score is below SCORE_THRESHOLD — nothing matched well.
-2. The hits are spread across four or more sections — the question is probably
-   about structure, not one fact.
-3. (applied later, in the grounding retry) an answer built from embedding hits
-   fails the grounding check, so retry once with the RLM arm.
+2. The hits are spread across SCATTER_SECTIONS or more sections — the question
+   is probably about structure, not one fact.
 
 Rules, not a model, because the signals already exist and a routing call would
-cost the latency the router exists to save. SCORE_THRESHOLD is tuned on the
-``tune`` split only.
+cost the latency the router exists to save. Both SCORE_THRESHOLD and
+SCATTER_SECTIONS must be tuned on the ``tune`` split: every turn logs the top
+score and the section count, and the escalation reason, so the distribution is
+measurable before the thresholds are trusted. Trigger 3 from the architecture
+guide (escalate after a grounding-check failure) is not wired into the answer
+loop yet.
 """
 from __future__ import annotations
 
@@ -28,7 +31,7 @@ from backend.retrieval.rlm_arm import RLMRetriever
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 SCORE_THRESHOLD = float(os.getenv("SCORE_THRESHOLD", "0.5"))
-SCATTER_SECTIONS = 4
+SCATTER_SECTIONS = int(os.getenv("SCATTER_SECTIONS", "4"))
 
 
 class Router:
@@ -42,12 +45,18 @@ class Router:
 
     def search(self, query: str, k: int = 5) -> list[Passage]:
         hits = self.embeddings.search(query, k=k)
-        if hits and hits[0].score < self.score_threshold:
-            trace.record(op="router", escalated=True, reason="weak best match",
-                         score=round(hits[0].score, 4))
-            return self.rlm.search(query, k=k)
-        if len({h.section for h in hits if h.section}) >= SCATTER_SECTIONS:
-            trace.record(op="router", escalated=True, reason="scattered sections",
-                         sections=len({h.section for h in hits if h.section}))
-            return self.rlm.search(query, k=k)
+        top = hits[0].score if hits else None
+        sections = len({h.section for h in hits if h.section})
+        trace.record(op="router", top_score=round(top, 4) if top is not None else None,
+                     sections=sections)
+
+        def escalate(reason: str) -> list[Passage]:
+            trace.record(op="router", escalated=True, reason=reason)
+            rlm_hits = self.rlm.search(query, k=k)
+            return rlm_hits or hits   # empty RLM must not make the answer worse
+
+        if hits and top < self.score_threshold:
+            return escalate("weak best match")
+        if sections >= SCATTER_SECTIONS:
+            return escalate("scattered sections")
         return hits

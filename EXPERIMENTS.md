@@ -161,25 +161,34 @@ rerun since; their numbers above predate the fix.
 
 ## Voice pipeline (Day 3, Block 1)
 
-Built `backend/voice.py` and `POST /voice`: Gemini STT → answer loop → grounding
-check → Gemini TTS, streamed back as SSE sentence by sentence. Three configs
-share one code path: `sequential` (one TTS call for the whole answer), `stream`
-(one TTS call per sentence, the default), and `stream_nocheck` (stream with no
-grounding check, to measure what the check costs).
+Built `backend/voice.py` and `POST /voice`: STT → answer loop → grounding check →
+TTS, streamed back as SSE sentence by sentence. Three configs share one code
+path: `sequential` (one TTS call for the whole answer), `stream` (one TTS call
+per sentence, the default), and `stream_nocheck` (stream with no grounding
+check, to measure what the check costs).
 
-- Speech runs on Gemini (`gemini-3.5-transcribe`, `gemini-3.1-flash-tts-preview`,
-  voice `charon`), not the local Whisper/Piper the plan sketched. Every stage of
-  a turn is therefore a network hop, so the "speech is local" latency win is
-  gone.
-- One end-to-end smoke run (`stream`, a mean-vs-median question, correctly cited
-  pages 12–17): STT 2.2 s, answer ready 31.4 s, first audio 44.8 s. The answer
-  and check dominate, and that time is almost all rate-limit waiting (14 RPM on
-  the answer model), not model time — the same story as the text evals.
-- TTS returns 24 kHz mono L16 PCM; `voice.py` wraps it in a WAV header so the
-  browser can play it. STT accepts `audio/wav`.
+**Speech is local by default** (`backend/speech.py`): faster-whisper `small.en`
+(int8, CPU) for STT and Piper `en_US-lessac-medium` for TTS, both loaded and run
+once at server startup so the first turn does not pay model loading. No audio
+leaves the machine; the only network hops in a turn are the answer and check
+model calls. `SPEECH=gemini` switches to Gemini STT/TTS for a comparison row.
 
-The three-config latency comparison (20 questions × 5 runs) is Block 4, not run
-yet.
+Spoken confirmation is decided in code, never by the model: while a send is
+pending, an utterance that is exactly one of a few fixed phrases ("confirm",
+"cancel", "don't send", …, after normalising case and punctuation) resolves the
+pending action and is answered with a fixed spoken reply; "confirm the mean is
+50" is treated as a question. A blank transcript returns without a model call.
+
+| Speech | Run | STT | Answer ready | First audio |
+| --- | --- | --- | --- | --- |
+| Gemini (`gemini-3.5-transcribe`, `gemini-3.1-flash-tts-preview`) — comparison | 1 smoke run, `stream` | 2.2 s | 31.4 s | 44.8 s |
+| Local (faster-whisper + Piper) | not yet measured | — | — | — |
+
+The Gemini row is one smoke run on a mean-vs-median question (correctly cited
+pages 12–17). Its answer and first-audio times are almost all rate-limit
+waiting (14 RPM on the answer model), not model time, and per-sentence Gemini
+TTS also spends free-tier requests. The local row and the three-config
+comparison (20 questions × 5 runs) are Block 4.
 
 ## RLM arm and router (Day 3, Block 2)
 
@@ -191,10 +200,27 @@ library) and `backend/retrieval/router.py`, and wired both into
   free-tier daily budget and the existing trace capture still splits model time
   from rate-limit waits (the two latency columns the router reports).
 - No tools reach the RLM, so `email_summary` cannot be called from code running
-  over untrusted text — the lethal-trifecta mitigation, asserted by a unit test.
-  `local` REPL, `max_depth=2`, `max_iterations=15`.
-- `SCORE_THRESHOLD=0.5` is the router's initial weak-match threshold. It is a
-  placeholder; it must be tuned on the `tune` split (Block 4), never on `report`.
+  over untrusted text (asserted by a unit test). `max_depth=2`,
+  `max_iterations=15`.
+- **The REPL is a partial sandbox, not a hard one.** The library's `local` REPL
+  exposes `open` and `__import__`, so code over untrusted text could read `.env`
+  and open network connections — the lethal trifecta. I could not use the Docker
+  environment with `--network none` because it needs a writable mount and a host
+  proxy. Instead the arm strips `open`, `__import__`, `getattr`, `type`,
+  `object`, `super` and the other escape primitives from the builtins, and
+  injects the document directly rather than reading it back with `open`. Two unit
+  tests run the attack (`open('.env').read()`, `import os`) and assert the key
+  never appears. This stops the naive attacks, but Python-level escapes
+  (`().__class__.__subclasses__()`) remain; a production build needs real
+  isolation.
+- `SCORE_THRESHOLD=0.65`, `SCATTER_SECTIONS=6`. These are set from a measurement on
+  the `tune` split: top cosine scores were 0.70–0.79 (so 0.5 never fired) and
+  section counts were 2–5 (so `sections>=4` fired on 7 of 10 questions, because
+  per-page chunking makes every slide title its own "section"). The router now
+  also **falls back to the embedding hits when the RLM arm returns nothing**, so
+  escalation never makes an answer worse. Trigger 3 (escalate after a grounding
+  failure) is still not wired into the answer loop. Both thresholds will need
+  re-tuning once the eval has harder questions (paraphrases, out-of-corpus).
 
 **The arm runs, but the free-tier model cannot drive it.** One live run
 (mean-vs-median) took ~2 min and returned no passages: `gemini-3.1-flash-lite`
@@ -224,6 +250,8 @@ measure poorly until a stronger model is available.
    rate-limit waiting, not model time (one call took ~600 s).
 
 ## Open items
+
+- Local voice latency: one live `stream` turn, then the 20 × 5 × 3 config run.
 
 - Judge agreement with human labels (10 answers): run
   `python -m evals.judge_agreement sample`, fill in

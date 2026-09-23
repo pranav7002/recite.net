@@ -27,6 +27,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from backend import agent, llm, speech
+from backend.speakable import speakable
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -141,14 +142,14 @@ async def voice_turn(
         pending(result.pending_action)
 
     if config == "sequential":
-        pcm, rate = await asyncio.to_thread(tts, result.text)
+        pcm, rate = await asyncio.to_thread(tts, speakable(result.text))
         marks["first_audio_ms"] = round((time.monotonic() - arrival) * 1000, 1)
         yield {"seq": 0, "mime_type": "audio/wav",
                "audio_b64": base64.b64encode(_pcm_to_wav(pcm, rate)).decode(),
                "text": result.text}
     else:
         for i, sentence in enumerate(split_sentences(result.text)):
-            pcm, rate = await asyncio.to_thread(tts, sentence)
+            pcm, rate = await asyncio.to_thread(tts, speakable(sentence))
             if i == 0:
                 marks["first_audio_ms"] = round((time.monotonic() - arrival) * 1000, 1)
             yield {"seq": i, "mime_type": "audio/wav",

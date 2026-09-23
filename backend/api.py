@@ -21,7 +21,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend import guardrails, ingest, quiz, store, tools, voice
+from backend import guardrails, ingest, store, tools, voice
 from backend.agent import answer
 from backend.citations import CITE
 from backend.llm import QuotaExhausted
@@ -152,64 +152,6 @@ async def voice_turn(
 async def _sse(gen):
     async for item in gen:
         yield f"data: {json.dumps(item, default=str)}\n\n"
-
-
-class QuizNextRequest(BaseModel):
-    unit: str = Field(min_length=1, max_length=100)
-
-
-class QuizAnswerRequest(BaseModel):
-    chunk_id: str = Field(min_length=1, max_length=100)
-    answer: str = Field(min_length=1, max_length=5000)
-    question: str = Field(default="", max_length=1000)
-
-
-@app.post("/quiz/next")
-def quiz_next(req: QuizNextRequest) -> dict:
-    try:
-        item = quiz.next_question(req.unit)
-    except quiz.UnknownUnit:
-        raise HTTPException(status_code=404, detail=f"No document with id {req.unit!r}.")
-    except QuotaExhausted as e:
-        raise HTTPException(status_code=429, detail=str(e)) from e
-    return {"chunk_id": item.chunk_id, "question": item.question,
-            "doc": item.passage.doc_name, "page": item.passage.page}
-
-
-@app.post("/quiz/answer")
-def quiz_answer(req: QuizAnswerRequest) -> dict:
-    try:
-        item = quiz.item_from(req.chunk_id, req.question)
-    except quiz.UnknownUnit:
-        raise HTTPException(status_code=404, detail=f"No passage with id {req.chunk_id!r}.")
-    try:
-        result = quiz.grade(item, req.answer)
-    except QuotaExhausted as e:
-        raise HTTPException(status_code=429, detail=str(e)) from e
-    return {"grade": result.grade, "missing": result.missing,
-            "doc": item.passage.doc_name, "page": item.passage.page}
-
-
-@app.post("/quiz/answer_voice")
-def quiz_answer_voice(
-    file: Annotated[UploadFile, File()],
-    chunk_id: Annotated[str, Form(min_length=1, max_length=100)],
-    question: Annotated[str, Form(max_length=1000)] = "",
-) -> dict:
-    """Spoken quiz answer: transcribe with the same STT as /voice, then grade."""
-    try:
-        item = quiz.item_from(chunk_id, question)
-    except quiz.UnknownUnit:
-        raise HTTPException(status_code=404, detail=f"No passage with id {chunk_id!r}.")
-    transcript = voice.stt(file.file.read()).strip()
-    if not transcript:
-        raise HTTPException(status_code=422, detail="I didn't hear an answer. Try again.")
-    try:
-        result = quiz.grade(item, transcript)
-    except QuotaExhausted as e:
-        raise HTTPException(status_code=429, detail=str(e)) from e
-    return {"transcript": transcript, "grade": result.grade, "missing": result.missing,
-            "doc": item.passage.doc_name, "page": item.passage.page}
 
 
 @app.post("/documents")

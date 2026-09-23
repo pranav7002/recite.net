@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>recite</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+<!-- KaTeX renders the $...$ maths in answers; speech gets a word version from backend/speakable.py -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <style>
   :root {
     --bg-side: #16120E;
@@ -47,11 +51,6 @@
   .stat-label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-muted-1); }
   .stat-val { font-size: 12.5px; font-weight: 700; color: var(--text-light-2); }
 
-  .pills { display: flex; gap: 4px; margin-top: 22px; background: var(--bg-side-3); padding: 4px; border-radius: 999px; }
-  .pill { flex: 1; padding: 11px 0; border-radius: 999px; border: none; font-size: 12.5px; font-weight: 700;
-          cursor: pointer; background: transparent; color: #B8AFA2; transition: background .15s, color .15s; }
-  .pill.active { background: var(--accent); color: #fff; }
-
   .section-label { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
                     color: #6E655A; margin-bottom: 10px; }
   .docs-header { display: flex; align-items: center; justify-content: space-between; margin-top: 28px; margin-bottom: 10px; }
@@ -65,9 +64,6 @@
   .doc-icon { flex-shrink: 0; color: #8C8175; }
   .doc-name { flex: 1; min-width: 0; font-size: 12px; color: #D8CFC1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .doc-meta { font-size: 10.5px; color: #6E655A; flex-shrink: 0; }
-  .doc-quiz-btn { flex-shrink: 0; background: var(--bg-side-3); border: none; border-radius: 999px; padding: 4px 9px;
-                  font-size: 10.5px; font-weight: 700; color: var(--text-muted-1); cursor: pointer; }
-  .doc-quiz-btn.active { background: var(--accent); color: #fff; }
   .doc-del-btn { flex-shrink: 0; background: none; border: none; color: #6E655A; cursor: pointer; padding: 3px; display: flex; }
   .doc-del-btn:hover { color: #C0392B; }
   .doc-empty { font-size: 11.5px; color: #6E655A; padding: 6px 2px; }
@@ -75,7 +71,7 @@
   /* ---- main ---- */
   #main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-main); }
   #topbar { padding: 24px 0 14px; display: flex; justify-content: center; flex-shrink: 0; }
-  #topbar-inner { width: 100%; max-width: 720px; padding: 0 8px; display: flex; align-items: center; justify-content: space-between; }
+  #topbar-inner { width: 100%; max-width: 720px; padding: 0 8px; display: flex; align-items: center; justify-content: flex-end; }
   #mode-label { font-size: 14px; font-weight: 700; color: var(--text-dark); }
   #msg-count { font-size: 12px; color: var(--text-muted); }
 
@@ -124,12 +120,6 @@
   .modal-card { width: 100%; max-width: 420px; background: #FFF9F4; border: 1px solid #F0DCC9; border-radius: 18px;
                 padding: 20px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 24px 48px rgba(20,15,10,.25); }
 
-  .quiz-grade { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700;
-                padding: 5px 10px; border-radius: 999px; width: fit-content; }
-  .grade-correct { background: #E7F5EC; color: var(--good); }
-  .grade-partial { background: #FBF0DE; color: var(--warn); }
-  .grade-wrong { background: #FBEAE8; color: var(--bad); }
-
   #composer-wrap { padding: 18px 0 24px; display: flex; justify-content: center; flex-shrink: 0; border-top: 1px solid #EEE6D9; }
   #composer { width: 100%; max-width: 720px; padding: 0 8px; display: flex; align-items: center; gap: 10px; }
   .mic-btn { width: 44px; height: 44px; border-radius: 50%; border: none; background: #F1E9DC; color: #5B5346;
@@ -163,7 +153,7 @@
   <div id="sidebar">
     <div>
       <div class="welcome-title">Welcome back.</div>
-      <div class="welcome-sub">Ask anything from your notes, or start a quiz.</div>
+      <div class="welcome-sub">Ask anything from your notes.</div>
     </div>
 
     <div class="stats">
@@ -181,18 +171,6 @@
         </div>
         <div class="stat-val" id="stat-questions">0</div>
       </div>
-      <div class="stat-row">
-        <div class="stat-label">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>
-          Quiz avg
-        </div>
-        <div class="stat-val" id="stat-quiz" style="color:#7FBE8F;">—</div>
-      </div>
-    </div>
-
-    <div class="pills">
-      <button class="pill active" id="pill-ask">Ask</button>
-      <button class="pill" id="pill-quiz">Quiz mode</button>
     </div>
 
     <div class="docs-header">
@@ -209,7 +187,6 @@
   <div id="main">
     <div id="topbar">
       <div id="topbar-inner">
-        <div id="mode-label">Ask</div>
         <div id="msg-count">0 messages</div>
       </div>
     </div>
@@ -258,12 +235,8 @@
   const sessionId = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
 
   const state = {
-    mode: "ask",                 // "ask" | "quiz"
-    messages: [],                // rendered transcript, one array shared across modes
+    messages: [],
     documents: [],
-    quizUnit: null,              // doc_id currently being quizzed
-    quizCurrent: null,           // {chunk_id, question, doc, page}
-    quizGrades: [],              // recent grade strings, for the sidebar average
     questionsToday: 0,
     recording: false,
     sending: false,
@@ -281,14 +254,10 @@
   const textInput = $("text-input");
   const sendBtn = $("send-btn");
   const micBtn = $("mic-btn");
-  const modeLabel = $("mode-label");
   const msgCount = $("msg-count");
   const docList = $("doc-list");
   const statDocs = $("stat-docs");
   const statQuestions = $("stat-questions");
-  const statQuiz = $("stat-quiz");
-  const pillAsk = $("pill-ask");
-  const pillQuiz = $("pill-quiz");
   const uploadBtn = $("upload-btn");
   const fileInput = $("file-input");
   const toastEl = $("toast");
@@ -316,6 +285,22 @@
     return node;
   }
   function text(tag, cls, str) { const n = el(tag, cls ? { class: cls } : null); n.textContent = str; return n; }
+  // Like text(), but typesets $...$ / $$...$$ with KaTeX. Falls back to the raw
+  // text if KaTeX hasn't loaded (offline), so an answer is never lost.
+  function mathText(tag, cls, str) {
+    const n = text(tag, cls, str);
+    if (window.renderMathInElement) {
+      try {
+        renderMathInElement(n, { throwOnError: false, delimiters: [
+          { left: "$$", right: "$$", display: true },
+          { left: "$", right: "$", display: false },
+          { left: "\\(", right: "\\)", display: false },
+          { left: "\\[", right: "\\]", display: true },
+        ] });
+      } catch (e) { /* leave raw text */ }
+    }
+    return n;
+  }
 
   const CITE_RE = /\(([^,()]+),\s*p\.\s*(\d+)\)/g;
   function extractCitations(str) {
@@ -328,21 +313,9 @@
 
   // ---------- rendering ----------
   function render() {
-    modeLabel.textContent = state.mode === "ask" ? "Ask" : "Quiz mode";
     msgCount.textContent = state.messages.length + " messages";
-    textInput.placeholder = state.mode === "ask" ? "Ask about your notes…" : "Type your answer…";
-    pillAsk.classList.toggle("active", state.mode === "ask");
-    pillQuiz.classList.toggle("active", state.mode === "quiz");
-
     statDocs.textContent = state.documents.length;
     statQuestions.textContent = state.questionsToday;
-    if (state.quizGrades.length) {
-      const score = { correct: 1, partial: 0.5, wrong: 0 };
-      const avg = state.quizGrades.reduce((a, g) => a + (score[g] ?? 0), 0) / state.quizGrades.length;
-      statQuiz.textContent = Math.round(avg * 100) + "%";
-    } else {
-      statQuiz.textContent = "—";
-    }
 
     renderDocs();
     renderMessages();
@@ -366,10 +339,6 @@
       })()]));
       row.appendChild(text("div", "doc-name", doc.name));
       row.appendChild(text("div", "doc-meta", (doc.chunks ?? 0) + " chunks"));
-      const quizBtn = el("button", { class: "doc-quiz-btn" + (state.quizUnit === doc.id ? " active" : "") });
-      quizBtn.textContent = "Quiz";
-      quizBtn.addEventListener("click", () => startQuiz(doc.id));
-      row.appendChild(quizBtn);
       const delBtn = el("button", { class: "doc-del-btn", title: "Delete", html:
         '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>' });
       delBtn.addEventListener("click", () => deleteDoc(doc.id));
@@ -406,7 +375,7 @@
     if (m.kind === "assistant") {
       const row = el("div", { class: "row start" });
       const bubble = el("div", { class: "bubble-assistant" });
-      bubble.appendChild(text("div", "bubble-text", m.text || "…"));
+      bubble.appendChild(mathText("div", "bubble-text", m.text || "…"));
       const cites = m.citations && m.citations.length ? m.citations : extractCitations(m.text || "");
       if (cites.length) {
         const chipRow = el("div", { class: "chip-row" });
@@ -441,23 +410,6 @@
       row.appendChild(bubble);
       return row;
     }
-    if (m.kind === "quiz-grade") {
-      const row = el("div", { class: "row start" });
-      const bubble = el("div", { class: "bubble-assistant" });
-      const gradeCls = m.grade === "correct" ? "grade-correct" : m.grade === "partial" ? "grade-partial" : "grade-wrong";
-      const gradeLabel = m.grade === "correct" ? "Correct" : m.grade === "partial" ? "Partial" : "Wrong";
-      bubble.appendChild(el("div", { class: "quiz-grade " + gradeCls }, [text("span", null, gradeLabel)]));
-      if (m.missing) bubble.appendChild(text("div", "bubble-text", m.missing));
-      if (m.doc) {
-        const chipRow = el("div", { class: "chip-row" });
-        const chip = el("span", { class: "cite-chip" });
-        chip.textContent = m.doc + " · p. " + m.page;
-        chipRow.appendChild(chip);
-        bubble.appendChild(chipRow);
-      }
-      row.appendChild(bubble);
-      return row;
-    }
     if (m.kind === "confirm") {
       // Only ever rendered after the modal has resolved — the decision itself
       // happens in the modal, not inline in the transcript.
@@ -484,7 +436,7 @@
       return row;
     }
     const row = el("div", { class: "row start" });
-    row.appendChild(text("div", "bubble-assistant", m.text || ""));
+    row.appendChild(mathText("div", "bubble-assistant", m.text || ""));
     return row;
   }
 
@@ -519,7 +471,6 @@
   async function deleteDoc(id) {
     try {
       await api("/documents/" + id, { method: "DELETE" });
-      if (state.quizUnit === id) { state.quizUnit = null; state.quizCurrent = null; }
       await loadDocuments();
     } catch (e) { toast("Delete failed: " + e.message); }
   }
@@ -592,78 +543,6 @@
     render();
   }
 
-  // ---------- quiz ----------
-  async function startQuiz(docId) {
-    state.mode = "quiz";
-    state.quizUnit = docId;
-    state.messages = [];
-    render();
-    await fetchNextQuestion();
-  }
-
-  async function fetchNextQuestion() {
-    if (!state.quizUnit) return;
-    try {
-      const res = await api("/quiz/next", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ unit: state.quizUnit }),
-      });
-      state.quizCurrent = res;
-      state.messages.push({ id: nextId++, kind: "assistant", text: res.question,
-        citations: [{ doc: res.doc, page: res.page }] });
-      render();
-    } catch (e) {
-      toast("Could not get a question: " + e.message);
-    }
-  }
-
-  async function sendQuizAnswer(answerText) {
-    if (!state.quizCurrent) { toast("Pick a document to quiz on first."); return; }
-    state.messages.push({ id: nextId++, kind: "user", text: answerText });
-    state.sending = true;
-    updateSendState();
-    render();
-    try {
-      const res = await api("/quiz/answer", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chunk_id: state.quizCurrent.chunk_id, answer: answerText, question: state.quizCurrent.question }),
-      });
-      state.quizGrades.push(res.grade);
-      state.messages.push({ id: nextId++, kind: "quiz-grade", grade: res.grade, missing: res.missing, doc: res.doc, page: res.page });
-      render();
-      await fetchNextQuestion();
-    } catch (e) {
-      state.messages.push({ id: nextId++, kind: "assistant", text: "Could not grade that: " + e.message });
-      render();
-    }
-    state.sending = false;
-    updateSendState();
-  }
-
-  async function sendQuizVoice(blob) {
-    if (!state.quizCurrent) { toast("Pick a document to quiz on first."); return; }
-    state.sending = true;
-    updateSendState();
-    render();
-    const form = new FormData();
-    form.append("file", blob, "audio.webm");
-    form.append("chunk_id", state.quizCurrent.chunk_id);
-    form.append("question", state.quizCurrent.question);
-    try {
-      const res = await api("/quiz/answer_voice", { method: "POST", body: form });
-      state.messages.push({ id: nextId++, kind: "voice-user", text: res.transcript });
-      state.quizGrades.push(res.grade);
-      state.messages.push({ id: nextId++, kind: "quiz-grade", grade: res.grade, missing: res.missing, doc: res.doc, page: res.page });
-      render();
-      await fetchNextQuestion();
-    } catch (e) {
-      state.messages.push({ id: nextId++, kind: "assistant", text: "Could not grade that: " + e.message });
-      render();
-    }
-    state.sending = false;
-    updateSendState();
-  }
-
   // ---------- composer ----------
   function updateSendState() {
     sendBtn.disabled = state.sending || !textInput.value.trim();
@@ -679,22 +558,8 @@
     if (!value || state.sending) return;
     textInput.value = "";
     updateSendState();
-    if (state.mode === "ask") sendAsk(value);
-    else sendQuizAnswer(value);
+    sendAsk(value);
   }
-
-  pillAsk.addEventListener("click", () => {
-    if (state.mode === "ask") return;
-    state.mode = "ask"; state.messages = []; state.quizUnit = null; state.quizCurrent = null;
-    render();
-  });
-  pillQuiz.addEventListener("click", () => {
-    if (state.mode === "quiz") return;
-    state.mode = "quiz"; state.messages = [];
-    render();
-    if (!state.quizUnit && state.documents.length) startQuiz(state.documents[0].id);
-    else if (!state.documents.length) toast("Upload a document, then click Quiz next to it.");
-  });
 
   uploadBtn.addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => {
@@ -709,7 +574,6 @@
   let mediaStream = null;
 
   async function startRecording() {
-    if (state.mode === "quiz" && !state.quizCurrent) { toast("Pick a document to quiz on first."); return; }
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (e) {
@@ -747,8 +611,7 @@
     micBtn.classList.remove("recording");
     const blob = await stopRecording();
     if (!blob || blob.size === 0) return;
-    if (state.mode === "ask") sendVoice(blob, releaseTs);
-    else sendQuizVoice(blob);
+    sendVoice(blob, releaseTs);
   }
 
   micBtn.addEventListener("mousedown", (e) => { e.preventDefault(); startRecording(); });
@@ -850,6 +713,7 @@
   loadDocuments();
   render();
 })();
+  window.addEventListener("load", () => { if (window.renderMathInElement) render(); });
 </script>
 </body>
 </html>

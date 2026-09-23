@@ -42,8 +42,3 @@ CREATE TABLE IF NOT EXISTS pending (
     status      TEXT NOT NULL DEFAULT 'pending',   -- pending | executed | cancelled
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
-CREATE TABLE IF NOT EXISTS quiz_misses (
-    chunk_id  TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
-    missed_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);

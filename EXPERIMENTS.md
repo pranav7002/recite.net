@@ -218,9 +218,12 @@ library) and `backend/retrieval/router.py`, and wired both into
   section counts were 2–5 (so `sections>=4` fired on 7 of 10 questions, because
   per-page chunking makes every slide title its own "section"). The router now
   also **falls back to the embedding hits when the RLM arm returns nothing**, so
-  escalation never makes an answer worse. Trigger 3 (escalate after a grounding
-  failure) is still not wired into the answer loop. Both thresholds will need
-  re-tuning once the eval has harder questions (paraphrases, out-of-corpus).
+  escalation never makes an answer worse. **Update, 2026-09-23: trigger 3
+  (escalate after a grounding failure) is now wired into the answer loop** —
+  `Router.escalate()` plus `backend.agent._redraft_after_escalation()`; see
+  "Trigger 3 wired in, and the real RLM latency cause" below. Both thresholds
+  will need re-tuning once the eval has harder questions (paraphrases,
+  out-of-corpus).
 
 **The arm runs, but the free-tier model cannot drive it.** One live run
 (mean-vs-median) took ~2 min and returned no passages: `gemini-3.1-flash-lite`

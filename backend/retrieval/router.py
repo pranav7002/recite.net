@@ -9,10 +9,10 @@ Three triggers:
    is probably about structure, not one fact.
 3. The grounding check fails on the embeddings arm's passages — that failure
    is itself evidence they were insufficient. Wired into ``backend.agent``'s
-   redraft step (``_escalate_after_grounding_failure``), via ``escalate()``
-   below, rather than into ``search()``: by the time a grounding check has
-   run, the answer loop already has a drafted answer and knows *which*
-   passages failed to support it, neither of which ``search()`` sees.
+   redraft step (``_redraft_after_escalation``), via ``escalate()`` below,
+   rather than into ``search()``: by the time a grounding check has run, the
+   answer loop already has a drafted answer and knows *which* passages
+   failed to support it, neither of which ``search()`` sees.
 
 Rules, not a model, because the signals already exist and a routing call would
 cost the latency the router exists to save. Both SCORE_THRESHOLD and

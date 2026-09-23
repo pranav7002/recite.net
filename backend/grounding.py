@@ -168,58 +168,6 @@ def check_and_retry(draft: str, state, messages: list[dict], llm, llm_small,
     return GroundingOutcome(text=refuse(result2.failing), retried=True, supported=False, checks=checks)
 
 
-JUDGE_PROMPT = """\
-You grade a student's spoken answer against a passage. Decide whether the answer \
-is correct, partially correct, or incorrect with respect to the passage, and say \
-in one sentence what is missing or wrong. Return one JSON object:
-{"grade": "correct" | "partial" | "incorrect", "missing": "..."}"""
-
-
-class Grade(BaseModel):
-    grade: str = "incorrect"       # correct | partial | incorrect
-    missing: str = ""
-
-
-def judge(student_answer: str, passages: list[Passage], llm_small,
-          question: str | None = None) -> Grade:
-    """Grade a student's answer against a passage — quiz mode reuses the checker.
-
-    On a JSON parse failure the judge is asked once more; only then is the
-    answer graded incorrect (fail closed)."""
-    messages = [
-        {"role": "system", "content": JUDGE_PROMPT},
-        {"role": "user", "content": (
-            f"Question: {question or ''}\n\n"
-            f"Passage:\n{_format_passages(passages)}\n\n"
-            f"Student answer: {student_answer}"
-        )},
-    ]
-    for _ in range(2):
-        grade = _parse_grade(_ask(llm_small, messages))
-        if grade is not None:
-            return grade
-    log.warning("quiz grade returned unparseable JSON twice; grading incorrect")
-    return Grade(grade="incorrect", missing="could not parse the grade")
-
-
-def _parse_grade(text: str) -> Grade | None:
-    try:
-        grade = Grade.model_validate_json(_extract_json(text))
-    except ValidationError:
-        return None
-    grade.grade = _canonical_grade(grade.grade)
-    return grade
-
-
-def _canonical_grade(grade: str) -> str:
-    g = (grade or "").strip().lower()
-    if g in {"correct", "right"}:
-        return "correct"
-    if g in {"partial", "partially correct", "partially_correct", "partly"}:
-        return "partial"
-    return "incorrect"
-
-
 def _trace(draft: str, result: CheckResult) -> dict:
     """What one check call decided, kept in the eval records so a refused
     answer can be traced to the claim (or parse failure) that caused it."""

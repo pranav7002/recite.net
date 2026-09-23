@@ -450,6 +450,19 @@ another timeout value.
 5. **Free-tier limits shape everything.** `gemini-3.8-flash` is 20 requests a
    day; the Flash-Lite models are 500. Latency numbers in these runs are mostly
    rate-limit waiting, not model time (one call took ~600 s).
+6. **The router stays off the live path.** `backend.agent.answer()` defaults
+   to the embeddings retriever only; `/ask`, `/voice` and `cli.py` never pass
+   `retriever=Router(...)`, and the nightly eval workflow only ever runs
+   `--arm embeddings`. Router (and the RLM arm it can escalate to) exists for
+   eval comparison, reached with `--arm router` / `--arm rlm`, not for
+   production traffic. This was already true before today, not a new change —
+   made explicit in code and here because everything else in this section
+   explains why: even timeout-bounded, the RLM arm's correctness collapsed
+   under a latency ceiling tight enough for a voice product (0/3 at 60s, 1/3
+   at 120s, vs. 3/3 unbounded), and its dominant cost was for a long time
+   invisible to its own instrumentation. Routing live traffic through it would
+   trade a working, fast, embeddings-only answer for an unreliable, much
+   slower one.
 
 ## Run 8: judge agreement with human labels (10 answers)
 

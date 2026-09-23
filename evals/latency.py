@@ -21,11 +21,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import statistics
 import subprocess
 import time
 import uuid
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -109,7 +108,7 @@ def cmd_run(args) -> None:
         row = {"id": q["id"], "config": cfg, "run": run, "ts": time.time()}
         try:
             row |= one_turn(args.url, AUDIO / f"{q['id']}.wav", cfg)
-        except Exception as e:                          # record and move on; a rerun retries it
+        except Exception as e:  # noqa: BLE001 — record and move on; a rerun retries it
             row["error"] = f"{type(e).__name__}: {e}"
         with RUNS.open("a") as f:
             f.write(json.dumps(row) + "\n")
@@ -132,9 +131,10 @@ def cmd_summarize(args) -> None:
     rows = [r for r in map(json.loads, RUNS.open()) if not r.get("error") and r.get("marks")]
     cols = [("client_ttfa_ms", "TTFA, client"), ("system_ttfa_ms", "TTFA minus quota waits"),
             ("stt_ms", "STT"), ("answer_ready_ms", "Answer ready"), ("wait_ms", "Limiter + backoff")]
-    lines = [f"# Voice latency, {date.today()}", "",
-             f"{len(rows)} turns from `{RUNS.name}`. p50 / p95 in ms. "
-             "Audio: macOS `say`, identical files for every config.", "",
+    today = datetime.now(tz=timezone.utc).date()
+    lines = [f"# Voice latency, {today}", "",
+             (f"{len(rows)} turns from `{RUNS.name}`. p50 / p95 in ms. "
+              "Audio: macOS `say`, identical files for every config."), "",
              "| Config | n | " + " | ".join(c[1] for c in cols) + " |",
              "| --- | --- | " + " | ".join("---" for _ in cols) + " |"]
     for cfg in CONFIGS:
@@ -153,9 +153,9 @@ def cmd_summarize(args) -> None:
         cells = [f"{pct(v, 50):,.0f} / {pct(v, 95):,.0f}" for v in vals.values()]
         lines.append(f"| `{cfg}` | {len(rs)} | " + " | ".join(cells) + " |")
     heard = [r for r in rows if r.get("transcript")]
-    lines += ["", f"Transcripts checked: {len(heard)}. Spot-check a few against the questions "
-              "before trusting the numbers (a misheard question changes the answer, and its length)."]
-    out = RESULTS / f"{date.today():%Y%m%d}_latency.md"
+    lines += ["", (f"Transcripts checked: {len(heard)}. Spot-check a few against the questions "
+                   "before trusting the numbers (a misheard question changes the answer, and its length).")]
+    out = RESULTS / f"{today:%Y%m%d}_latency.md"
     out.write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
     print(f"\nwrote {out}")

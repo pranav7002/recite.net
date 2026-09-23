@@ -59,6 +59,11 @@ def answer(question: str, model=answer_llm, retriever: Retriever | None = None,
     unchecked, which the voice pipeline's stream_nocheck config uses to measure
     what the check costs.
     """
+    # Embeddings only, never Router, by default: the RLM arm it can escalate to
+    # is unbounded-latency-prone and, even timeout-bounded, unreliable on this
+    # free-tier model (EXPERIMENTS.md, "the real RLM latency cause" and part 2).
+    # Router stays available for eval comparison (--arm router / --arm rlm) but
+    # is deliberately kept out of /ask, /voice and the CLI.
     retriever = retriever or EmbeddingRetriever()
     passages = list(retriever.search(question, k=k))
     messages = _build_messages(question, passages, history)

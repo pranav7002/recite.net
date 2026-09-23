@@ -58,6 +58,12 @@
                 border-radius: 999px; padding: 6px 11px; font-size: 11px; font-weight: 700; color: var(--text-light-2);
                 cursor: pointer; }
   .upload-btn:hover { background: #2A2319; }
+  .upload-btn[disabled] { opacity: .5; cursor: not-allowed; }
+
+  .doc-row-uploading { opacity: .85; }
+  .doc-spinner { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+                 border: 2px solid #4A4030; border-top-color: #D8CFC1; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   .doc-row { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border-radius: 10px; background: var(--bg-side-2);
              margin-bottom: 5px; }
@@ -82,11 +88,13 @@
   .row.end { justify-content: flex-end; }
   .row.start { justify-content: flex-start; }
 
-  .bubble-user { max-width: 72%; background: var(--accent); color: #fff; padding: 12px 16px;
-                 border-radius: 18px 18px 4px 18px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
-  .bubble-assistant { max-width: 76%; background: #fff; border: 1px solid var(--card-border); padding: 14px 16px;
+  .bubble-user { max-width: 72%; min-width: 0; background: var(--accent); color: #fff; padding: 12px 16px;
+                 border-radius: 18px 18px 4px 18px; font-size: 14px; line-height: 1.45; white-space: pre-wrap;
+                 overflow-wrap: anywhere; }
+  .bubble-assistant { max-width: 76%; min-width: 0; background: #fff; border: 1px solid var(--card-border); padding: 14px 16px;
                        border-radius: 18px 18px 18px 4px; display: flex; flex-direction: column; gap: 10px; }
-  .bubble-text { font-size: 14px; line-height: 1.5; color: var(--text-dark); white-space: pre-wrap; }
+  .bubble-text { font-size: 14px; line-height: 1.5; color: var(--text-dark); white-space: pre-wrap;
+                 overflow-wrap: anywhere; }
   .bubble-voice { font-size: 13px; color: var(--text-muted); font-style: italic; display: flex; align-items: center; gap: 6px; }
   .ttfa-note { font-size: 11px; color: var(--text-muted); }
 
@@ -102,17 +110,18 @@
 
   .chip-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .cite-chip { display: inline-flex; align-items: center; gap: 5px; background: #FBF0E8; color: #9A5433; font-size: 11px;
-               font-weight: 700; padding: 5px 9px; border-radius: 999px; }
+               font-weight: 700; padding: 5px 9px; border-radius: 999px; max-width: 100%; overflow-wrap: anywhere; }
   .icon-btn { display: inline-flex; align-items: center; gap: 5px; background: #F4EFE7; border: none; border-radius: 999px;
               padding: 7px 12px; font-size: 11px; font-weight: 600; color: #5B5346; cursor: pointer; }
   .icon-btn.round { padding: 0; width: 30px; height: 30px; justify-content: center; flex-shrink: 0; }
   .icon-btn:hover { background: #EEE4D4; }
 
-  .confirm-card { max-width: 78%; background: #FFF9F4; border: 1px solid #F0DCC9; border-radius: 18px; padding: 16px;
+  .confirm-card { max-width: 78%; min-width: 0; background: #FFF9F4; border: 1px solid #F0DCC9; border-radius: 18px; padding: 16px;
                   display: flex; flex-direction: column; gap: 12px; }
   .confirm-head { display: flex; align-items: center; gap: 8px; }
   .confirm-title { font-size: 13px; font-weight: 700; color: var(--text-dark); }
-  .confirm-fields { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: #6B6255; }
+  .confirm-fields { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: #6B6255;
+                     overflow-wrap: anywhere; }
   .confirm-fields .k { color: var(--text-muted); }
   .confirm-actions { display: flex; gap: 8px; margin-top: 2px; }
   .btn-cancel { flex: 1; padding: 13px 0; border-radius: 10px; border: 1px solid #E3D9C9; background: #fff;
@@ -136,6 +145,9 @@
              display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
   .mic-btn.recording { background: #F1E0D5; color: #B65B3A; animation: pulseRing 1.4s ease-out infinite; }
   .mic-btn[disabled] { opacity: .45; cursor: not-allowed; }
+  .stop-btn { background: #F1E0D5; color: #B65B3A; }
+  .stop-btn:hover { background: #EAD3C4; }
+  .stop-btn[hidden] { display: none; }
   @keyframes pulseRing {
     0% { box-shadow: 0 0 0 0 rgba(217,119,87,.35); }
     70% { box-shadow: 0 0 0 9px rgba(217,119,87,0); }
@@ -208,6 +220,9 @@
         <button class="mic-btn" id="mic-btn" aria-label="Voice input" title="Hold to talk">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 19v3"/></svg>
         </button>
+        <button class="mic-btn stop-btn" id="stop-btn" aria-label="Stop audio" title="Stop audio" hidden>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+        </button>
         <input id="text-input" placeholder="Ask about your notes…" autocomplete="off">
         <button id="send-btn" aria-label="Send message" disabled>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
@@ -247,6 +262,7 @@
   const state = {
     messages: [],
     documents: [],
+    uploading: [],                // [{name}] files currently POSTing to /documents
     questionsToday: 0,
     recording: false,
     sending: false,
@@ -256,6 +272,7 @@
   let nextId = 1;
   const audioQueue = [];
   let audioPlaying = false;
+  let currentAudio = null;   // the Audio element actually playing right now, for stopAudio()
 
   // ---------- DOM ----------
   const $ = (id) => document.getElementById(id);
@@ -264,6 +281,7 @@
   const textInput = $("text-input");
   const sendBtn = $("send-btn");
   const micBtn = $("mic-btn");
+  const stopBtn = $("stop-btn");
   const msgCount = $("msg-count");
   const docList = $("doc-list");
   const statDocs = $("stat-docs");
@@ -312,13 +330,36 @@
     return n;
   }
 
-  const CITE_RE = /\(([^,()]+),\s*p\.\s*(\d+)\)/g;
+  // "(doc, p. 8, 9)" / "(doc, pp. 12–17)" with every page kept, for the chips.
+  const CITE_ALL_RE = /\(\s*"?((?:[^,()"]|\([^()]*\))+?)"?\s*,\s*pp?\.\s*([\d,\s–-]+)\)/g;
   function extractCitations(str) {
     const out = [];
     let m;
-    CITE_RE.lastIndex = 0;
-    while ((m = CITE_RE.exec(str))) out.push({ doc: m[1].trim(), page: parseInt(m[2], 10) });
+    CITE_ALL_RE.lastIndex = 0;
+    while ((m = CITE_ALL_RE.exec(str))) {
+      const doc = m[1].trim();
+      const range = m[2].match(/^\s*(\d+)\s*[–-]\s*(\d+)\s*$/);
+      if (range) out.push({ doc, page: range[1] + "–" + range[2] });
+      else m[2].split(",").map((p) => p.trim()).filter(Boolean).forEach((p) => out.push({ doc, page: p }));
+    }
     return out;
+  }
+  // The answer text without its inline references; they move to the chips below.
+  function stripCitations(str) {
+    return str.replace(CITE_ALL_RE, "").replace(/[ \t]+([.,;:!?])/g, "$1").replace(/[ \t]{2,}/g, " ").trim();
+  }
+  // One chip per document, pages merged: "DS-2 (1) · p. 8, 9".
+  function groupCitations(cites) {
+    const byDoc = new Map();
+    cites.forEach((c) => {
+      const pages = byDoc.get(c.doc) || [];
+      if (!pages.includes(String(c.page))) pages.push(String(c.page));
+      byDoc.set(c.doc, pages);
+    });
+    return [...byDoc].map(([doc, pages]) => ({
+      doc: doc.replace(/\.(pdf|md|txt)$/i, ""),
+      pages: pages.sort((a, b) => parseInt(a, 10) - parseInt(b, 10)),
+    }));
   }
 
   // ---------- rendering ----------
@@ -333,10 +374,17 @@
 
   function renderDocs() {
     docList.innerHTML = "";
-    if (!state.documents.length) {
+    if (!state.documents.length && !state.uploading.length) {
       docList.appendChild(text("div", "doc-empty", "No documents yet — upload a PDF, .txt or .md."));
       return;
     }
+    state.uploading.forEach((u) => {
+      const row = el("div", { class: "doc-row doc-row-uploading" });
+      row.appendChild(el("div", { class: "doc-spinner" }));
+      row.appendChild(text("div", "doc-name", u.name));
+      row.appendChild(text("div", "doc-meta", "Uploading…"));
+      docList.appendChild(row);
+    });
     state.documents.forEach((doc) => {
       const row = el("div", { class: "doc-row" });
       row.appendChild(el("div", { class: "doc-icon" }, [(() => {
@@ -390,18 +438,18 @@
         row.appendChild(bubble);
         return row;
       }
-      bubble.appendChild(mathText("div", "bubble-text", m.text));
-      const cites = m.citations && m.citations.length ? m.citations : extractCitations(m.text || "");
+      bubble.appendChild(mathText("div", "bubble-text", stripCitations(m.text)));
+      // Parsed from the text first: it keeps every page ("p. 8, 9"); the server's
+      // list is the fallback for answers whose text carries no inline references.
+      const parsed = extractCitations(m.text || "");
+      const cites = groupCitations(parsed.length ? parsed : (m.citations || []));
       if (cites.length) {
         const chipRow = el("div", { class: "chip-row" });
-        const seen = new Set();
         cites.forEach((c) => {
-          const key = c.doc + "|" + c.page;
-          if (seen.has(key)) return;
-          seen.add(key);
           const chip = el("span", { class: "cite-chip", html:
             '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"></path><path d="M14 3v5h5"></path></svg>' });
-          chip.appendChild(document.createTextNode(" " + c.doc + " · p. " + c.page));
+          chip.appendChild(document.createTextNode(" " + c.doc + " · p. " + c.pages.join(", ")));
+          chip.title = c.doc;
           chipRow.appendChild(chip);
         });
         if (m.audio && m.audio.length) {
@@ -474,13 +522,22 @@
   }
 
   async function uploadFile(file) {
+    const entry = { name: file.name };
+    state.uploading.push(entry);
+    uploadBtn.disabled = true;
+    render();
     const form = new FormData();
     form.append("file", file);
     try {
       await api("/documents", { method: "POST", body: form });
       toast("Uploaded " + file.name);
       await loadDocuments();
-    } catch (e) { toast("Upload failed: " + e.message); }
+    } catch (e) {
+      toast("Upload failed: " + e.message);
+    }
+    state.uploading = state.uploading.filter((u) => u !== entry);
+    uploadBtn.disabled = state.uploading.length > 0;
+    render();
   }
 
   async function deleteDoc(id) {
@@ -719,14 +776,24 @@
   }
   function playNextInQueue() {
     const item = audioQueue.shift();
-    if (!item) { audioPlaying = false; return; }
+    if (!item) { audioPlaying = false; currentAudio = null; stopBtn.hidden = true; return; }
     audioPlaying = true;
+    stopBtn.hidden = false;
     const audio = new Audio("data:" + item.mime + ";base64," + item.b64);
+    currentAudio = audio;
     if (item.onPlaying) audio.addEventListener("playing", item.onPlaying, { once: true });
     audio.addEventListener("ended", playNextInQueue);
     audio.addEventListener("error", playNextInQueue);
     audio.play().catch(() => playNextInQueue());
   }
+  function stopAudio() {
+    audioQueue.length = 0;                 // drop any not-yet-played sentences
+    if (currentAudio) { currentAudio.pause(); currentAudio.currentTime = 0; }
+    currentAudio = null;
+    audioPlaying = false;
+    stopBtn.hidden = true;
+  }
+  stopBtn.addEventListener("click", stopAudio);
   function playSentenceAudios(audioList) {
     audioList.forEach((a) => audioQueue.push({ mime: a.mime, b64: a.b64 }));
     if (!audioPlaying) playNextInQueue();

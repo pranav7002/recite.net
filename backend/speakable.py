@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import re
 
-CITATION = re.compile(r"\s*\([^()]*\bpp?\.\s*\d[^()]*\)")   # (doc, p. 6), (doc, pp. 12–17)
+# (doc, p. 6), (doc, pp. 12–17), (doc, p. 8, 9) — and file names that carry their
+# own brackets, like ("DS-2 (1).pdf", p. 9): one level of nested (...) is allowed.
+_INNER = r"(?:[^()]|\([^()]*\))"
+CITATION = re.compile(rf"\s*\({_INNER}*?\bpp?\.\s*\d{_INNER}*\)")
 MATH = re.compile(r"\$\$?(.+?)\$\$?")
 
 LATEX = [

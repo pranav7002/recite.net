@@ -34,7 +34,7 @@ import time
 from pathlib import Path
 
 from backend import llm, store, trace
-from backend.citations import CITE
+from backend.citations import CITE, CITE_MULTI
 from backend.retrieval.base import Passage
 
 BACKEND_NAME = "recite-gemini"
@@ -63,7 +63,7 @@ _STRIP_BUILTINS = frozenset({
 })
 
 # "(name, p. 14, 17)" — multi-page aware, unlike the single-page CITE regex.
-_CITE_MULTI = re.compile(r"\(([^,()]+),\s*p\.\s*([\d,\s]+)\)")
+_CITE_MULTI = CITE_MULTI
 
 # Some free-tier models (gemma-4-26b-a4b-it) wrap their real output in a
 # <thought>...</thought> block before the actual response. The rlms library's
@@ -82,13 +82,24 @@ def _doc_key(name: str) -> str:
     return Path(name).stem.lower()
 
 
-def _make_client(model_name: str):
+def _make_client(model_name: str, calls_sink: list[dict] | None = None):
     """A duck-typed BaseLM whose calls go through llm.rlm_llm — a model chosen
     for this arm specifically, not the answer model. gemini-3.1-flash-lite
     (500/day) plans forever and never finalises a grounded answer through the
     rlms code-execution loop; gemma-4-26b-a4b-it (14,400/day) does, in a live
     test, once _strip_thought() removes its <thought> leakage. See
-    EXPERIMENTS.md for the run that established this."""
+    EXPERIMENTS.md for the run that established this.
+
+    calls_sink, if given, collects one wait_s/backoff_s/call_s record per
+    completion() call — via a fresh trace.capture() scoped to just this call,
+    not the ambient one. The library's LMHandler answers llm_query()/
+    rlm_query() calls from the sandboxed REPL over a threaded socket server
+    (ThreadingTCPServer spawns a plain thread per request), which does not
+    inherit contextvars, so an outer trace.capture() around the whole search
+    never sees those calls — they were real, they were often the dominant
+    cost, and they were invisible (EXPERIMENTS.md, "the real RLM latency
+    cause, part 2"). Capturing locally, inside the same thread the call
+    actually runs in, sidesteps that instead of fighting it."""
     from rlm.core.types import ModelUsageSummary, UsageSummary
 
     class RateLimitedGemini:
@@ -97,7 +108,10 @@ def _make_client(model_name: str):
 
         def completion(self, prompt, model=None) -> str:
             messages = [{"role": "user", "content": prompt}] if isinstance(prompt, str) else prompt
-            resp = llm.rlm_llm.chat(messages)
+            with trace.capture() as calls:
+                resp = llm.rlm_llm.chat(messages)
+            if calls_sink is not None:
+                calls_sink.extend(calls)
             return _strip_thought(resp.choices[0].message.content or "")
 
         async def acompletion(self, prompt, model=None) -> str:
@@ -122,7 +136,7 @@ def _install_backend() -> None:
 
     def get_client(backend, backend_kwargs):
         if backend == BACKEND_NAME:
-            return _make_client(backend_kwargs.get("model_name"))
+            return _make_client(backend_kwargs.get("model_name"), backend_kwargs.get("calls_sink"))
         return original(backend, backend_kwargs)
 
     rlm_core.get_client = get_client
@@ -193,13 +207,15 @@ def _install_environment() -> None:
     rlm_core._recite_env_installed = True
 
 
-def rlm_kwargs() -> dict:
+def rlm_kwargs(calls_sink: list[dict] | None = None) -> dict:
     """The RLM configuration. custom_tools is deliberately absent — neither the
     RLM nor its sub-calls get any tool, so email_summary cannot be reached from
-    code running over untrusted document text."""
+    code running over untrusted document text. calls_sink is threaded through
+    to _make_client() (see its docstring) so every completion() call, however
+    it's dispatched, reports its timing."""
     return {
         "backend": BACKEND_NAME,
-        "backend_kwargs": {"model_name": llm.rlm_llm.model},
+        "backend_kwargs": {"model_name": llm.rlm_llm.model, "calls_sink": calls_sink},
         "environment": SANDBOX_ENV_NAME,
         "max_depth": MAX_DEPTH,
         "max_iterations": MAX_ITERATIONS,
@@ -207,13 +223,13 @@ def rlm_kwargs() -> dict:
     }
 
 
-def make_rlm():
+def make_rlm(calls_sink: list[dict] | None = None):
     """Build the RLM configured for this project."""
     from rlm import RLM
 
     _install_backend()
     _install_environment()
-    return RLM(**rlm_kwargs())
+    return RLM(**rlm_kwargs(calls_sink))
 
 
 def _build_context(docs: list[dict]) -> str:

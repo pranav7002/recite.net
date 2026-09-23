@@ -119,6 +119,8 @@ def cmd_run(args) -> None:
               + (f"  ERROR {row['error']}" if "error" in row else ""))
         if "QuotaExhausted" in row.get("error", "") or "429" in row.get("error", ""):
             raise SystemExit("daily quota reached; rerun tomorrow to resume")
+        if row.get("error", "").startswith("ConnectionError"):
+            raise SystemExit("server not reachable (restarted or stopped?); start it and rerun to resume")
 
 
 def pct(xs: list[float], p: float) -> float:

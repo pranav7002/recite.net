@@ -367,6 +367,74 @@ voice turn at all (e.g. a filler utterance while it runs, or restricting
 escalation to the text/`/ask` path). Flagging this rather than picking one
 silently.
 
+## The real RLM latency cause, part 2: raising the ceiling broke correctness, then a second tracing gap (2026-09-23)
+
+**Scoped confirmation eval, `--arm rlm` on the three tune questions that
+scored 3/3 correct before any of this (`lookup_01`, `multihop_02`,
+`structural_01`): `MAX_TIMEOUT_S=60` bounded wall time (156-203s, down from
+400-620s) but dropped hit rate to 0/3.** All three came back with 0 passages
+and the refusal answer — the ceiling was cutting the loop off before it ever
+reached a cited answer, not just before it got slow. A bounded system that
+reliably gives up is not an improvement over a slow one that reliably works.
+
+**Raised `MAX_TIMEOUT_S` to 120 and re-ran the same three questions: 1/3
+correct, and wall-clock got *worse*, not better** (`lookup_01` 462.4s,
+`structural_01` 317.7s, both still empty; `multihop_02` 126.0s, correct).
+Raising the ceiling is not a clean dial on either latency or correctness.
+Worse: `lookup_01`'s trace only accounted for 28.2s of its 462.4s wall
+time — an even bigger unexplained gap than before the per-call timeout fix,
+on a run where `backoff_s` was 0 the whole way through.
+
+**Root cause: a second, different tracing gap, not the same one as before.**
+`RLMRetriever.search()` wrapped the whole call in an *outer* `trace.capture()`
+to catch every `llm.rlm_llm.chat()` call the loop makes, including the model's
+own `llm_query()`/`rlm_query()` calls from inside its generated REPL code.
+But those calls are answered by the `rlms` library's `LMHandler` — a
+`socketserver.ThreadingTCPServer` that spawns a plain `threading.Thread` per
+request, not `asyncio.to_thread()` — and plain threads do not inherit
+Python's `contextvars`. `trace.capture()`'s sink is a `ContextVar`, so any
+`trace.record()` call made from inside one of those handler threads was
+silently invisible to the outer capture: it still logged (hence showing up in
+raw log output), just never landed in the list the summary was built from.
+Confirmed directly: a deeper probe (wrapping `LocalREPL.execute_code` and
+`RLM`'s `on_iteration_*` callbacks) on the exact question that showed the gap
+caught the model writing `result = llm_query(query)` in its own generated
+code — the dominant cost was real, it was just structurally invisible to the
+instrumentation that was supposed to be measuring it.
+
+**Fix:** stopped relying on the ambient/outer `trace.capture()` for this
+arm entirely. `_make_client()` (`backend/retrieval/rlm_arm.py`) now wraps
+*each individual* `completion()` call in its own local `trace.capture()` —
+correct regardless of which thread that call runs in, since the capture and
+the call it's capturing are always in the same thread by construction — and
+extends a shared `calls_sink` list passed in from `RLMRetriever.search()` via
+`rlm_kwargs(calls_sink=...)` → `backend_kwargs["calls_sink"]`. Verified this
+is safe against `LMHandler`'s own source: `LMHandler.get_client()` returns
+the *same* registered client instance for every request regardless of thread,
+so a single `calls_sink` list correctly accumulates every call the search
+makes, root-level or nested.
+
+**Confirmed on a live run, same `lookup_01` question, `MAX_TIMEOUT_S=120`:**
+the standalone probe hit the timeout cleanly at 128.2s ("Timeout exceeded
+after iteration 4: 128.2s of 120.0s limit" — confirming `MAX_TIMEOUT_S` itself
+was already working correctly), and summing the now-complete `calls_sink`
+by hand: `wait_s=27.5, backoff_s=17.2, model_s=81.3` — **126.0s traced of
+128.2s wall-clock (98%)**, up from 66s of 463.8s (14%) before this fix. Two
+`llm_query()` calls are visible in the trace now, 25.9s and 35.0s (the
+second needed 5 retry attempts after a burst of 429s) — exactly the cost that
+was invisible before.
+
+**Where this leaves the arm:** the tracing is now trustworthy — a future run
+can actually be attributed to waiting, backoff, or model time instead of
+guessed at. The `MAX_TIMEOUT_S` correctness regression (0/3 at 60s, 1/3 at
+120s, 3/3 unbounded) is unresolved and, on the evidence so far, does not look
+like a value that exists: the loop's iterations genuinely need more time to
+converge than a voice turn can afford to give them on this free-tier model.
+The next lever, now that the instrumentation can actually show it, is
+`MAX_ITERATIONS` — fewer iterations means fewer chances for the model to
+call `llm_query()` (each one costing real, previously-hidden seconds) — not
+another timeout value.
+
 ## Findings
 
 1. **Chunk boundaries decide both citations and hit rate.** Making chunks

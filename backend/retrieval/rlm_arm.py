@@ -259,6 +259,17 @@ class RLMRetriever:
             return []
         rlm = self._rlm or make_rlm()
         started = time.monotonic()
-        completion = rlm.completion(_build_context(docs), root_prompt=_root_prompt(query))
-        trace.record(op="rlm", wall_s=round(time.monotonic() - started, 3))
+        # Every model call the loop makes (root and recursive) goes through
+        # llm.rlm_llm.chat(), which records wait_s/backoff_s/call_s per call —
+        # capture() collects those so a 400-600s search can be attributed to
+        # limiter waits, 429-retry backoff, or genuine model time instead of
+        # guessed at. asyncio.to_thread (used by acompletion for recursive
+        # sub-calls) copies the current context into its worker thread, so
+        # this still sees calls made off the main thread.
+        with trace.capture() as calls:
+            completion = rlm.completion(_build_context(docs), root_prompt=_root_prompt(query))
+        t = trace.timings(calls)
+        trace.record(op="rlm", wall_s=round(time.monotonic() - started, 3),
+                     wait_s=t["wait_s"], backoff_s=t["backoff_s"], model_s=t["model_s"],
+                     calls=t["calls"])
         return _answer_to_passages(completion.response, docs)[:k]

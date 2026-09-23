@@ -39,9 +39,14 @@ def capture() -> Iterator[list[dict]]:
 
 
 def timings(calls: list[dict]) -> dict[str, float]:
-    """wait_s: seconds spent waiting on the rate limiter. model_s: seconds the
-    API calls themselves took. Only model_s measures the system; wait_s
-    measures the free tier."""
+    """wait_s: seconds spent waiting on the rate limiter, up front, before the
+    first attempt. backoff_s: seconds spent sleeping between 429/5xx retries —
+    a separate number, because it means the limiter's rpm undersells the real
+    cap (a token-per-minute limit, most often) rather than measuring ordinary
+    queueing. model_s: seconds the API calls themselves took, successful or
+    not. Only model_s measures the system; wait_s and backoff_s both measure
+    the free tier, for two different reasons."""
     return {"wait_s": round(sum(float(c.get("wait_s", 0)) for c in calls), 3),
+            "backoff_s": round(sum(float(c.get("backoff_s", 0)) for c in calls), 3),
             "model_s": round(sum(float(c.get("call_s", 0)) for c in calls), 3),
             "calls": len(calls)}

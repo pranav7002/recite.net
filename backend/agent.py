@@ -14,6 +14,7 @@ from backend.llm import answer_llm, check_llm
 from backend.prompts import SYSTEM_PROMPT
 from backend.retrieval.base import Passage, Retriever
 from backend.retrieval.embeddings import EmbeddingRetriever
+from backend.retrieval.router import Router
 from backend.tools import TOOLS, TOOLS_BY_NAME, format_passages
 
 K = 5
@@ -87,7 +88,7 @@ def answer(question: str, model=answer_llm, retriever: Retriever | None = None,
 
     outcome = grounding.check_and_retry(
         draft, state, messages, model, critic,
-        step=lambda: _redraft(messages, model, retriever, state, max_rounds),
+        step=lambda: _redraft_after_escalation(question, messages, model, retriever, state, max_rounds),
     )
     return TurnResult(text=outcome.text, passages=state.passages, steps=state.steps,
                       pending_action=state.pending_action,
@@ -165,6 +166,25 @@ def _tool_call_dict(call) -> dict:
     if extra:
         entry["extra_content"] = extra
     return entry
+
+
+def _redraft_after_escalation(question: str, messages: list[dict], model, retriever,
+                              state: TurnState, max_rounds: int) -> str | None:
+    """Router trigger 3 (router.py, architecture guide section 10): a failed
+    grounding check on the embeddings arm's passages is itself evidence they
+    were insufficient, so pull in the RLM arm's passages before the redraft —
+    not just re-asking the same model over the same context. A no-op when
+    `retriever` isn't a Router (the plain embeddings arm has nothing to
+    escalate to)."""
+    if isinstance(retriever, Router):
+        escalated = retriever.escalate(question, k=len(state.passages) or K)
+        seen = {p.id for p in state.passages}
+        fresh = [p for p in escalated if p.id not in seen]
+        if fresh:
+            state.passages.extend(fresh)
+            messages.append({"role": "user", "content":
+                             f"A deeper search found more passages:\n{format_passages(fresh)}"})
+    return _redraft(messages, model, retriever, state, max_rounds)
 
 
 def _redraft(messages: list[dict], model, retriever, state: TurnState,

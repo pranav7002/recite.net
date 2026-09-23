@@ -104,6 +104,12 @@ class LLM:
     def chat(self, messages, tools=None, temperature=0.2, stream=False, **kw):
         self.day_budget.take()                      # raises before a wasted call
         waited = self.limiter.wait()
+        # backoff accumulates the 429/5xx retry sleeps, which used to vanish:
+        # only the *successful* attempt's call_s was ever recorded, so a call
+        # that failed four times before succeeding looked identical in the
+        # trace to one that succeeded first try. That gap is what hid the RLM
+        # latency cause (see EXPERIMENTS.md, "RLM arm and router").
+        backoff = 0.0
         for attempt in range(5):
             try:
                 t = time.monotonic()
@@ -112,10 +118,15 @@ class LLM:
                     temperature=temperature, stream=stream, **kw,
                 )
                 trace.record(model=self.model, wait_s=round(waited, 3),
-                             call_s=round(time.monotonic() - t, 3))
+                             backoff_s=round(backoff, 3), call_s=round(time.monotonic() - t, 3),
+                             attempts=attempt + 1)
                 return resp
             except (RateLimitError, InternalServerError):   # 429, or 5xx such as 503 overloaded
-                time.sleep(min(60, 2 ** attempt) + random.random())   # backoff with jitter
+                sleep_s = min(60, 2 ** attempt) + random.random()
+                backoff += sleep_s
+                time.sleep(sleep_s)   # backoff with jitter
+        trace.record(model=self.model, wait_s=round(waited, 3), backoff_s=round(backoff, 3),
+                     call_s=0.0, attempts=5, exhausted=True)
         raise QuotaExhausted(f"{self.model}: rate limited or unavailable after 5 attempts")
 
 

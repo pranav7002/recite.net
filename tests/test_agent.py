@@ -7,6 +7,7 @@ import json
 from backend import guardrails, store, tools
 from backend.agent import answer
 from backend.grounding import REFUSAL
+from backend.retrieval.router import Router
 from tests.fake_llm import FakeLLM, text, tool_call
 from tests.helpers import FakeRetriever, passage, read_outbox
 
@@ -96,6 +97,32 @@ def test_grounding_retry_runs_at_most_once():
     assert len(critic.calls) == 2
 
 
+def test_grounding_failure_escalates_router_to_rlm():
+    """Router trigger 3: a failed grounding check on the embeddings arm's
+    passages pulls in the RLM arm's passages before the redraft, and the
+    retry succeeds using them. A plain (non-Router) retriever is unaffected —
+    see test_grounding_retry_runs_at_most_once, which uses one."""
+    draft1 = "The mean of the sample is 50."
+    draft2 = "The mean of the sample is 50, confirmed."
+    critic = FakeLLM([
+        text(_unsupported(draft1)),
+        text(json.dumps({"claims": [{"claim": draft2, "verdict": "SUPPORTED", "passage_id": "r1"}]})),
+    ])
+    model = FakeLLM([text(draft1), text(draft2)])
+
+    emb = FakeRetriever([passage("unrelated text", pid="p1")])
+    rlm = FakeRetriever([passage("The mean is 50.", doc_name="rlm.pdf", pid="r1")])
+    router_ = Router(embeddings=emb, rlm=rlm, score_threshold=0.0, scatter_sections=99)
+
+    result = answer("what is the mean", model=model, retriever=router_, critic=critic)
+
+    assert result.retried is True
+    assert result.grounding == "supported"
+    assert result.text == draft2
+    assert rlm.queries == ["what is the mean"]           # escalate() called exactly once
+    assert {p.doc_name for p in result.passages} == {"notes.pdf", "rlm.pdf"}
+
+
 def test_blocked_send_creates_no_pending_row(db, monkeypatch):
     monkeypatch.setattr(guardrails, "CONTACTS", frozenset({"friend@uni.edu"}))
     model = FakeLLM([
@@ -115,7 +142,7 @@ def test_trace_capture_splits_wait_from_model_time():
 
     with trace.capture() as calls:
         trace.record(model="m", wait_s=4.0, call_s=1.5)
-        trace.record(model="m", wait_s=0.5, call_s=2.0)
-    assert trace.timings(calls) == {"wait_s": 4.5, "model_s": 3.5, "calls": 2}
+        trace.record(model="m", wait_s=0.5, backoff_s=6.0, call_s=2.0)
+    assert trace.timings(calls) == {"wait_s": 4.5, "backoff_s": 6.0, "model_s": 3.5, "calls": 2}
     trace.record(model="m", wait_s=9, call_s=9)          # outside the block: not captured
     assert len(calls) == 2

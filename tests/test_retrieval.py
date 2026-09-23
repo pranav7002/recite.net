@@ -7,7 +7,7 @@ under test.
 """
 from __future__ import annotations
 
-import os
+from pathlib import Path
 from types import SimpleNamespace
 
 from backend import llm, store
@@ -125,7 +125,11 @@ def test_router_escalates_on_scattered_sections():
     emb = type("R", (), {"search": lambda self, q, k=5: _passages(
         [{"id": f"p{i}", "score": 0.9, "section": f"s{i}"} for i in range(4)])})()
     rlm = type("R", (), {"search": lambda self, q, k=5: _passages([{"id": "r1", "doc": "rlm.pdf", "score": 0.0}])})()
-    router_ = router.Router(embeddings=emb, rlm=rlm, score_threshold=0.5)
+    # scatter_sections pinned explicitly, not left to the SCATTER_SECTIONS
+    # module default: that default reads SCATTER_SECTIONS from any local
+    # .env, which prod tunes to 6 (EXPERIMENTS.md) — this test's 4-section
+    # fixture would then silently stop triggering escalation.
+    router_ = router.Router(embeddings=emb, rlm=rlm, score_threshold=0.5, scatter_sections=4)
     assert [p.doc_name for p in router_.search("q")] == ["rlm.pdf"]
 
 
@@ -143,15 +147,42 @@ def test_router_falls_back_to_embeddings_when_rlm_empty():
     assert [p.id for p in router_.search("q")] == ["p1"]
 
 
+def test_router_escalate_forces_rlm_regardless_of_triggers():
+    """escalate() is trigger 3's entry point (wired into backend.agent's
+    redraft step, not into search()): it must call the RLM arm even when
+    neither the score nor the scatter trigger would fire on its own, and it
+    must not fall back to embeddings hits — the answer loop, which has its
+    own already-failed passages to fall back to, owns that decision."""
+    emb = type("R", (), {"search": lambda self, q, k=5: _passages([{"id": "p1", "score": 0.99}])})()
+    rlm = type("R", (), {"search": lambda self, q, k=5: _passages([{"id": "r1", "doc": "rlm.pdf", "score": 0.0}])})()
+    router_ = router.Router(embeddings=emb, rlm=rlm)
+    result = router_.escalate("q", reason="grounding check failed")
+    assert [p.doc_name for p in result] == ["rlm.pdf"]
+
+
+def test_router_escalate_returns_empty_when_rlm_empty():
+    """No embeddings fallback inside escalate() itself — see the docstring
+    above; an empty RLM result is returned as-is."""
+    rlm = type("R", (), {"search": lambda self, q, k=5: []})()
+    router_ = router.Router(embeddings=type("R", (), {"search": lambda self, q, k=5: []})(), rlm=rlm)
+    assert router_.escalate("q") == []
+
+
 def test_sandbox_blocks_env_read():
     """The attack the user cares about: code over untrusted text tries to read
-    .env and put it in the answer. `open` is stripped, so the key never leaks."""
+    .env and put it in the answer. `open` is stripped, so the key never leaks.
+
+    A fake secret is planted directly in the sandbox's own execution directory
+    (LocalREPL.execute_code cd's into repl.temp_dir before running code), so
+    this is self-contained rather than depending on a real GEMINI_API_KEY
+    being set in the environment — which is unset in CI (ci.yml runs without
+    it, by design) and would otherwise have skipped the real assertion."""
     repl = rlm_arm.make_sandboxed_repl()
     try:
+        secret = "sk-fake-not-a-real-key-8f2c1e"
+        (Path(repl.temp_dir) / ".env").write_text(f"GEMINI_API_KEY={secret}\n")
         result = repl.execute_code("answer['content'] = open('.env').read(); answer['ready'] = True")
-        key = os.getenv("GEMINI_API_KEY")
-        assert key, "GEMINI_API_KEY must be set for this test"
-        assert key not in result.stdout and key not in result.stderr
+        assert secret not in result.stdout and secret not in result.stderr
         assert result.final_answer is None          # open() raised before ready was set
         assert "NameError" in result.stderr
     finally:

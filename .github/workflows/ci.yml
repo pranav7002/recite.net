@@ -7,18 +7,18 @@ jobs:
       db:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_USER: sonar
-          POSTGRES_PASSWORD: sonar
-          POSTGRES_DB: sonar_test
+          POSTGRES_USER: recite
+          POSTGRES_PASSWORD: recite
+          POSTGRES_DB: recite_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U sonar"
+          --health-cmd "pg_isready -U recite"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://sonar:sonar@localhost:5432/sonar_test
+      DATABASE_URL: postgresql://recite:recite@localhost:5432/recite_test
       ANSWER_MODEL: test
       CHECK_MODEL: test
     steps:

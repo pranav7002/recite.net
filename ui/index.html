@@ -92,6 +92,7 @@
                        border-radius: 18px 18px 18px 4px; display: flex; flex-direction: column; gap: 10px; }
   .bubble-text { font-size: 14px; line-height: 1.5; color: var(--text-dark); white-space: pre-wrap; }
   .bubble-voice { font-size: 13px; color: var(--text-muted); font-style: italic; display: flex; align-items: center; gap: 6px; }
+  .ttfa-note { font-size: 11px; color: var(--text-muted); }
 
   .chip-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .cite-chip { display: inline-flex; align-items: center; gap: 5px; background: #FBF0E8; color: #9A5433; font-size: 11px;
@@ -113,9 +114,15 @@
   .btn-confirm { flex: 1; padding: 13px 0; border-radius: 10px; border: none; background: var(--accent);
                  color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; }
   .status-line { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; }
-  .status-sent { color: var(--good); }
+  .status-queued { color: var(--good); }
   .status-cancelled { color: var(--text-muted); }
   .status-error { color: var(--bad); }
+
+  .modal-overlay { position: fixed; inset: 0; background: rgba(20,15,10,.45); display: flex;
+                   align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+  .modal-overlay[hidden] { display: none; }
+  .modal-card { width: 100%; max-width: 420px; background: #FFF9F4; border: 1px solid #F0DCC9; border-radius: 18px;
+                padding: 20px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 24px 48px rgba(20,15,10,.25); }
 
   .quiz-grade { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700;
                 padding: 5px 10px; border-radius: 999px; width: fit-content; }
@@ -225,6 +232,24 @@
 </div>
 <div class="toast" id="toast"></div>
 
+<div class="modal-overlay" id="confirm-modal" hidden>
+  <div class="modal-card">
+    <div class="confirm-head">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#D97757" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"></path><path d="M4 6l8 7 8-7"></path></svg>
+      <div class="confirm-title">Confirm before sending</div>
+    </div>
+    <div class="confirm-fields">
+      <div><span class="k">To</span>&nbsp;&nbsp;<span id="modal-to"></span></div>
+      <div><span class="k">Subject</span>&nbsp;&nbsp;<span id="modal-subject"></span></div>
+      <div><span class="k">Message</span>&nbsp;&nbsp;<span id="modal-body"></span></div>
+    </div>
+    <div class="confirm-actions">
+      <button class="btn-cancel" id="modal-cancel-btn">Cancel</button>
+      <button class="btn-confirm" id="modal-confirm-btn">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function () {
   "use strict";
@@ -242,6 +267,7 @@
     questionsToday: 0,
     recording: false,
     sending: false,
+    activePending: null,         // {id, args} while the confirm modal is open
   };
 
   let nextId = 1;
@@ -266,6 +292,12 @@
   const uploadBtn = $("upload-btn");
   const fileInput = $("file-input");
   const toastEl = $("toast");
+  const confirmModal = $("confirm-modal");
+  const modalTo = $("modal-to");
+  const modalSubject = $("modal-subject");
+  const modalBody = $("modal-body");
+  const modalCancelBtn = $("modal-cancel-btn");
+  const modalConfirmBtn = $("modal-confirm-btn");
 
   function toast(text) {
     toastEl.textContent = text;
@@ -403,6 +435,9 @@
         chipRow.appendChild(playBtn);
         bubble.appendChild(chipRow);
       }
+      if (m.ttfaMs != null) {
+        bubble.appendChild(text("div", "ttfa-note", "First audio in " + m.ttfaMs + " ms"));
+      }
       row.appendChild(bubble);
       return row;
     }
@@ -424,29 +459,22 @@
       return row;
     }
     if (m.kind === "confirm") {
+      // Only ever rendered after the modal has resolved — the decision itself
+      // happens in the modal, not inline in the transcript.
       const row = el("div", { class: "row start" });
       const card = el("div", { class: "confirm-card" });
       const head = el("div", { class: "confirm-head", html:
         '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#D97757" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"></path><path d="M4 6l8 7 8-7"></path></svg>' });
-      head.appendChild(text("div", "confirm-title", "Confirm before sending"));
+      head.appendChild(text("div", "confirm-title", "Email summary"));
       card.appendChild(head);
       const fields = el("div", { class: "confirm-fields" });
       const toRow = el("div", null, [text("span", "k", "To  "), document.createTextNode(m.args.to)]);
       const subjRow = el("div", null, [text("span", "k", "Subject  "), document.createTextNode(m.args.subject)]);
-      const bodyRow = el("div", null, [text("span", "k", "Message  "), document.createTextNode(m.args.body)]);
-      fields.appendChild(toRow); fields.appendChild(subjRow); fields.appendChild(bodyRow);
+      fields.appendChild(toRow); fields.appendChild(subjRow);
       card.appendChild(fields);
-      if (m.status === "pending") {
-        const actions = el("div", { class: "confirm-actions" });
-        const cancel = el("button", { class: "btn-cancel" }); cancel.textContent = "Cancel";
-        const confirm = el("button", { class: "btn-confirm" }); confirm.textContent = "Confirm";
-        cancel.addEventListener("click", () => resolvePending(m, "cancel"));
-        confirm.addEventListener("click", () => resolvePending(m, "confirm"));
-        actions.appendChild(cancel); actions.appendChild(confirm);
-        card.appendChild(actions);
-      } else if (m.status === "sent") {
-        card.appendChild(el("div", { class: "status-line status-sent", html:
-          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2F7D4F" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><span>Sent to your study group</span>' }));
+      if (m.status === "queued") {
+        card.appendChild(el("div", { class: "status-line status-queued", html:
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2F7D4F" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><span>Queued to the outbox — not actually emailed</span>' }));
       } else if (m.status === "cancelled") {
         card.appendChild(el("div", { class: "status-line status-cancelled" }, [text("span", null, "Cancelled — nothing was sent.")]));
       } else if (m.status === "error") {
@@ -498,25 +526,49 @@
 
   function addPendingIfAny(pendingAction) {
     if (!pendingAction) return;
-    state.messages.push({ id: nextId++, kind: "confirm", pid: pendingAction.id,
-      args: pendingAction.args, status: "pending" });
+    openConfirmModal(pendingAction);
   }
 
-  async function resolvePending(m, action) {
+  function openConfirmModal(pendingAction) {
+    state.activePending = pendingAction;
+    modalTo.textContent = pendingAction.args.to;
+    modalSubject.textContent = pendingAction.args.subject;
+    modalBody.textContent = pendingAction.args.body;
+    confirmModal.hidden = false;
+  }
+
+  function closeConfirmModal() {
+    state.activePending = null;
+    confirmModal.hidden = true;
+  }
+
+  async function resolveActivePending(action) {
+    const pending = state.activePending;
+    if (!pending) return;
+    modalCancelBtn.disabled = true;
+    modalConfirmBtn.disabled = true;
+    const entry = { id: nextId++, kind: "confirm", args: pending.args, status: "queued" };
     try {
       if (action === "cancel") {
-        await api("/cancel/" + m.pid, { method: "POST" });
-        m.status = "cancelled";
+        await api("/cancel/" + pending.id, { method: "POST" });
+        entry.status = "cancelled";
       } else {
-        await api("/confirm/" + m.pid, { method: "POST" });
-        m.status = "sent";
+        await api("/confirm/" + pending.id, { method: "POST" });
+        entry.status = "queued";
       }
     } catch (e) {
-      m.status = "error";
-      m.errorText = e.message;
+      entry.status = "error";
+      entry.errorText = e.message;
     }
+    modalCancelBtn.disabled = false;
+    modalConfirmBtn.disabled = false;
+    state.messages.push(entry);
+    closeConfirmModal();
     render();
   }
+
+  modalCancelBtn.addEventListener("click", () => resolveActivePending("cancel"));
+  modalConfirmBtn.addEventListener("click", () => resolveActivePending("confirm"));
 
   // ---------- ask (text) ----------
   async function sendAsk(question) {
@@ -588,6 +640,30 @@
     updateSendState();
   }
 
+  async function sendQuizVoice(blob) {
+    if (!state.quizCurrent) { toast("Pick a document to quiz on first."); return; }
+    state.sending = true;
+    updateSendState();
+    render();
+    const form = new FormData();
+    form.append("file", blob, "audio.webm");
+    form.append("chunk_id", state.quizCurrent.chunk_id);
+    form.append("question", state.quizCurrent.question);
+    try {
+      const res = await api("/quiz/answer_voice", { method: "POST", body: form });
+      state.messages.push({ id: nextId++, kind: "voice-user", text: res.transcript });
+      state.quizGrades.push(res.grade);
+      state.messages.push({ id: nextId++, kind: "quiz-grade", grade: res.grade, missing: res.missing, doc: res.doc, page: res.page });
+      render();
+      await fetchNextQuestion();
+    } catch (e) {
+      state.messages.push({ id: nextId++, kind: "assistant", text: "Could not grade that: " + e.message });
+      render();
+    }
+    state.sending = false;
+    updateSendState();
+  }
+
   // ---------- composer ----------
   function updateSendState() {
     sendBtn.disabled = state.sending || !textInput.value.trim();
@@ -633,7 +709,7 @@
   let mediaStream = null;
 
   async function startRecording() {
-    if (state.mode !== "ask") { toast("Voice answers aren't wired up in quiz mode yet — type it in."); return; }
+    if (state.mode === "quiz" && !state.quizCurrent) { toast("Pick a document to quiz on first."); return; }
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (e) {
@@ -660,29 +736,33 @@
     });
   }
 
+  async function handleMicRelease(e) {
+    if (e.cancelable) e.preventDefault();
+    if (!state.recording) return;
+    // performance.now() here, before the async stop/encode work, is the
+    // browser's "button release" instant — the t0 the TTFA table is measured
+    // from, per the plan's timing rule.
+    const releaseTs = performance.now();
+    state.recording = false;
+    micBtn.classList.remove("recording");
+    const blob = await stopRecording();
+    if (!blob || blob.size === 0) return;
+    if (state.mode === "ask") sendVoice(blob, releaseTs);
+    else sendQuizVoice(blob);
+  }
+
   micBtn.addEventListener("mousedown", (e) => { e.preventDefault(); startRecording(); });
   micBtn.addEventListener("touchstart", (e) => { e.preventDefault(); startRecording(); }, { passive: false });
-  ["mouseup", "mouseleave"].forEach((evt) => micBtn.addEventListener(evt, async () => {
-    if (!state.recording) return;
-    state.recording = false;
-    micBtn.classList.remove("recording");
-    const blob = await stopRecording();
-    if (blob && blob.size > 0) sendVoice(blob);
-  }));
-  micBtn.addEventListener("touchend", async (e) => {
-    e.preventDefault();
-    if (!state.recording) return;
-    state.recording = false;
-    micBtn.classList.remove("recording");
-    const blob = await stopRecording();
-    if (blob && blob.size > 0) sendVoice(blob);
-  });
+  micBtn.addEventListener("mouseup", handleMicRelease);
+  micBtn.addEventListener("mouseleave", handleMicRelease);
+  micBtn.addEventListener("touchend", handleMicRelease);
 
-  async function sendVoice(blob) {
+  async function sendVoice(blob, releaseTs) {
     const placeholder = { id: nextId++, kind: "voice-user", text: "" };
     state.messages.push(placeholder);
     const assistantMsg = { id: nextId++, kind: "assistant", text: "", citations: [], audio: [] };
     state.messages.push(assistantMsg);
+    let firstAudioCaptured = false;
     render();
 
     const form = new FormData();
@@ -734,31 +814,35 @@
           sentences.push(payload.text);
           assistantMsg.text = sentences.join(" ");
           assistantMsg.audio.push({ mime: payload.mime_type || "audio/wav", b64: payload.audio_b64 });
-          queueAudio(payload.mime_type || "audio/wav", payload.audio_b64);
+          const onPlaying = firstAudioCaptured ? null : () => {
+            assistantMsg.ttfaMs = Math.round(performance.now() - releaseTs);
+            console.log("[voice] time-to-first-audio:", assistantMsg.ttfaMs, "ms");
+            render();
+          };
+          firstAudioCaptured = true;
+          queueAudio(payload.mime_type || "audio/wav", payload.audio_b64, onPlaying);
           render();
         }
       }
     }
   }
 
-  function queueAudio(mime, b64) {
-    audioQueue.push(mime + "|" + b64);
+  function queueAudio(mime, b64, onPlaying) {
+    audioQueue.push({ mime, b64, onPlaying });
     if (!audioPlaying) playNextInQueue();
   }
   function playNextInQueue() {
     const item = audioQueue.shift();
     if (!item) { audioPlaying = false; return; }
     audioPlaying = true;
-    const sep = item.indexOf("|");
-    const mime = item.slice(0, sep);
-    const b64 = item.slice(sep + 1);
-    const audio = new Audio("data:" + mime + ";base64," + b64);
+    const audio = new Audio("data:" + item.mime + ";base64," + item.b64);
+    if (item.onPlaying) audio.addEventListener("playing", item.onPlaying, { once: true });
     audio.addEventListener("ended", playNextInQueue);
     audio.addEventListener("error", playNextInQueue);
     audio.play().catch(() => playNextInQueue());
   }
   function playSentenceAudios(audioList) {
-    audioList.forEach((a) => audioQueue.push(a.mime + "|" + a.b64));
+    audioList.forEach((a) => audioQueue.push({ mime: a.mime, b64: a.b64 }));
     if (!audioPlaying) playNextInQueue();
   }
 

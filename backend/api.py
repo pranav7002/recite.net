@@ -18,6 +18,7 @@ from typing import Annotated, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend import guardrails, ingest, quiz, store, tools, voice
@@ -311,3 +312,11 @@ def _save_to_uploads(filename: str, data: bytes) -> Path:
     if not path.exists():
         path.write_bytes(data)
     return path
+
+
+# Mounted last so it never shadows an API route above: FastAPI matches the
+# declared routes first and falls through to this static app for everything
+# else, including "/".
+_UI_DIR = Path(__file__).resolve().parent.parent / "ui"
+if _UI_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")

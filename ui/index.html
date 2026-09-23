@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>recite</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+<style>
+  :root {
+    --bg-side: #16120E;
+    --bg-side-2: #1E1811;
+    --bg-side-3: #241E17;
+    --bg-main: #FAF6F0;
+    --accent: #D97757;
+    --text-light: #F5F0E8;
+    --text-light-2: #F0E9DC;
+    --text-muted-1: #C9BEAE;
+    --text-muted-2: #A79C8C;
+    --text-muted-3: #6E655A;
+    --text-dark: #241E17;
+    --text-muted: #9A9186;
+    --card-border: #ECE4D8;
+    --good: #2F7D4F;
+    --warn: #B45309;
+    --bad: #C0392B;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font-family: 'Manrope', sans-serif; background: var(--bg-main); color: var(--text-dark); }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: #E3DACB; border-radius: 999px; }
+  input::placeholder { color: #B3A896; }
+  button { font-family: inherit; }
+
+  #app { display: flex; flex-direction: row; height: 100vh; overflow: hidden; }
+
+  /* ---- sidebar ---- */
+  #sidebar { width: 300px; flex-shrink: 0; background: var(--bg-side); display: flex; flex-direction: column;
+             padding: 28px 22px; overflow-y: auto; }
+  .welcome-title { font-size: 19px; font-weight: 700; color: var(--text-light); line-height: 1.32; }
+  .welcome-sub { font-size: 12.5px; color: var(--text-muted-2); margin-top: 7px; line-height: 1.55; }
+
+  .stats { display: flex; flex-direction: column; margin-top: 24px; }
+  .stat-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0;
+              border-bottom: 1px solid var(--bg-side-3); }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-muted-1); }
+  .stat-val { font-size: 12.5px; font-weight: 700; color: var(--text-light-2); }
+
+  .pills { display: flex; gap: 4px; margin-top: 22px; background: var(--bg-side-3); padding: 4px; border-radius: 999px; }
+  .pill { flex: 1; padding: 11px 0; border-radius: 999px; border: none; font-size: 12.5px; font-weight: 700;
+          cursor: pointer; background: transparent; color: #B8AFA2; transition: background .15s, color .15s; }
+  .pill.active { background: var(--accent); color: #fff; }
+
+  .section-label { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+                    color: #6E655A; margin-bottom: 10px; }
+  .docs-header { display: flex; align-items: center; justify-content: space-between; margin-top: 28px; margin-bottom: 10px; }
+  .upload-btn { display: inline-flex; align-items: center; gap: 5px; background: var(--bg-side-3); border: none;
+                border-radius: 999px; padding: 6px 11px; font-size: 11px; font-weight: 700; color: var(--text-light-2);
+                cursor: pointer; }
+  .upload-btn:hover { background: #2A2319; }
+
+  .doc-row { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border-radius: 10px; background: var(--bg-side-2);
+             margin-bottom: 5px; }
+  .doc-icon { flex-shrink: 0; color: #8C8175; }
+  .doc-name { flex: 1; min-width: 0; font-size: 12px; color: #D8CFC1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .doc-meta { font-size: 10.5px; color: #6E655A; flex-shrink: 0; }
+  .doc-quiz-btn { flex-shrink: 0; background: var(--bg-side-3); border: none; border-radius: 999px; padding: 4px 9px;
+                  font-size: 10.5px; font-weight: 700; color: var(--text-muted-1); cursor: pointer; }
+  .doc-quiz-btn.active { background: var(--accent); color: #fff; }
+  .doc-del-btn { flex-shrink: 0; background: none; border: none; color: #6E655A; cursor: pointer; padding: 3px; display: flex; }
+  .doc-del-btn:hover { color: #C0392B; }
+  .doc-empty { font-size: 11.5px; color: #6E655A; padding: 6px 2px; }
+
+  /* ---- main ---- */
+  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-main); }
+  #topbar { padding: 24px 0 14px; display: flex; justify-content: center; flex-shrink: 0; }
+  #topbar-inner { width: 100%; max-width: 720px; padding: 0 8px; display: flex; align-items: center; justify-content: space-between; }
+  #mode-label { font-size: 14px; font-weight: 700; color: var(--text-dark); }
+  #msg-count { font-size: 12px; color: var(--text-muted); }
+
+  #msg-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; }
+  #msg-inner { width: 100%; max-width: 720px; padding: 4px 8px 16px; display: flex; flex-direction: column; gap: 14px; }
+
+  .row { display: flex; }
+  .row.end { justify-content: flex-end; }
+  .row.start { justify-content: flex-start; }
+
+  .bubble-user { max-width: 72%; background: var(--accent); color: #fff; padding: 12px 16px;
+                 border-radius: 18px 18px 4px 18px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
+  .bubble-assistant { max-width: 76%; background: #fff; border: 1px solid var(--card-border); padding: 14px 16px;
+                       border-radius: 18px 18px 18px 4px; display: flex; flex-direction: column; gap: 10px; }
+  .bubble-text { font-size: 14px; line-height: 1.5; color: var(--text-dark); white-space: pre-wrap; }
+  .bubble-voice { font-size: 13px; color: var(--text-muted); font-style: italic; display: flex; align-items: center; gap: 6px; }
+
+  .chip-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .cite-chip { display: inline-flex; align-items: center; gap: 5px; background: #FBF0E8; color: #9A5433; font-size: 11px;
+               font-weight: 700; padding: 5px 9px; border-radius: 999px; }
+  .icon-btn { display: inline-flex; align-items: center; gap: 5px; background: #F4EFE7; border: none; border-radius: 999px;
+              padding: 7px 12px; font-size: 11px; font-weight: 600; color: #5B5346; cursor: pointer; }
+  .icon-btn.round { padding: 0; width: 30px; height: 30px; justify-content: center; flex-shrink: 0; }
+  .icon-btn:hover { background: #EEE4D4; }
+
+  .confirm-card { max-width: 78%; background: #FFF9F4; border: 1px solid #F0DCC9; border-radius: 18px; padding: 16px;
+                  display: flex; flex-direction: column; gap: 12px; }
+  .confirm-head { display: flex; align-items: center; gap: 8px; }
+  .confirm-title { font-size: 13px; font-weight: 700; color: var(--text-dark); }
+  .confirm-fields { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: #6B6255; }
+  .confirm-fields .k { color: var(--text-muted); }
+  .confirm-actions { display: flex; gap: 8px; margin-top: 2px; }
+  .btn-cancel { flex: 1; padding: 13px 0; border-radius: 10px; border: 1px solid #E3D9C9; background: #fff;
+                color: #5B5346; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .btn-confirm { flex: 1; padding: 13px 0; border-radius: 10px; border: none; background: var(--accent);
+                 color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .status-line { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; }
+  .status-sent { color: var(--good); }
+  .status-cancelled { color: var(--text-muted); }
+  .status-error { color: var(--bad); }
+
+  .quiz-grade { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700;
+                padding: 5px 10px; border-radius: 999px; width: fit-content; }
+  .grade-correct { background: #E7F5EC; color: var(--good); }
+  .grade-partial { background: #FBF0DE; color: var(--warn); }
+  .grade-wrong { background: #FBEAE8; color: var(--bad); }
+
+  #composer-wrap { padding: 18px 0 24px; display: flex; justify-content: center; flex-shrink: 0; border-top: 1px solid #EEE6D9; }
+  #composer { width: 100%; max-width: 720px; padding: 0 8px; display: flex; align-items: center; gap: 10px; }
+  .mic-btn { width: 44px; height: 44px; border-radius: 50%; border: none; background: #F1E9DC; color: #5B5346;
+             display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+  .mic-btn.recording { background: #F1E0D5; color: #B65B3A; animation: pulseRing 1.4s ease-out infinite; }
+  .mic-btn[disabled] { opacity: .45; cursor: not-allowed; }
+  @keyframes pulseRing {
+    0% { box-shadow: 0 0 0 0 rgba(217,119,87,.35); }
+    70% { box-shadow: 0 0 0 9px rgba(217,119,87,0); }
+    100% { box-shadow: 0 0 0 0 rgba(217,119,87,0); }
+  }
+  #text-input { flex: 1; border: 1px solid #EAE1D2; background: #fff; border-radius: 999px; padding: 12px 18px;
+                font-size: 13.5px; color: var(--text-dark); outline: none; height: 46px; }
+  #send-btn { width: 46px; height: 46px; border-radius: 50%; border: none; background: var(--accent); color: #fff;
+              display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; }
+  #send-btn[disabled] { opacity: .4; cursor: not-allowed; }
+
+  .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--text-dark);
+           color: #fff; padding: 10px 18px; border-radius: 999px; font-size: 12.5px; opacity: 0; pointer-events: none;
+           transition: opacity .2s; z-index: 50; }
+  .toast.show { opacity: 1; }
+
+  @media (max-width: 720px) {
+    #sidebar { width: 240px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="sidebar">
+    <div>
+      <div class="welcome-title">Welcome back.</div>
+      <div class="welcome-sub">Ask anything from your notes, or start a quiz.</div>
+    </div>
+
+    <div class="stats">
+      <div class="stat-row">
+        <div class="stat-label">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+          Documents
+        </div>
+        <div class="stat-val" id="stat-docs">0</div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-label">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          Questions today
+        </div>
+        <div class="stat-val" id="stat-questions">0</div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-label">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>
+          Quiz avg
+        </div>
+        <div class="stat-val" id="stat-quiz" style="color:#7FBE8F;">—</div>
+      </div>
+    </div>
+
+    <div class="pills">
+      <button class="pill active" id="pill-ask">Ask</button>
+      <button class="pill" id="pill-quiz">Quiz mode</button>
+    </div>
+
+    <div class="docs-header">
+      <div class="section-label" style="margin:0;">Documents</div>
+      <button class="upload-btn" id="upload-btn">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        Upload
+      </button>
+      <input type="file" id="file-input" accept=".pdf,.txt,.md" style="display:none;">
+    </div>
+    <div id="doc-list"></div>
+  </div>
+
+  <div id="main">
+    <div id="topbar">
+      <div id="topbar-inner">
+        <div id="mode-label">Ask</div>
+        <div id="msg-count">0 messages</div>
+      </div>
+    </div>
+
+    <div id="msg-scroll"><div id="msg-inner"></div></div>
+
+    <div id="composer-wrap">
+      <div id="composer">
+        <button class="mic-btn" id="mic-btn" aria-label="Voice input" title="Hold to talk">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 19v3"/></svg>
+        </button>
+        <input id="text-input" placeholder="Ask about your notes…" autocomplete="off">
+        <button id="send-btn" aria-label="Send message" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  const API = "";
+  const sessionId = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
+
+  const state = {
+    mode: "ask",                 // "ask" | "quiz"
+    messages: [],                // rendered transcript, one array shared across modes
+    documents: [],
+    quizUnit: null,              // doc_id currently being quizzed
+    quizCurrent: null,           // {chunk_id, question, doc, page}
+    quizGrades: [],              // recent grade strings, for the sidebar average
+    questionsToday: 0,
+    recording: false,
+    sending: false,
+  };
+
+  let nextId = 1;
+  const audioQueue = [];
+  let audioPlaying = false;
+
+  // ---------- DOM ----------
+  const $ = (id) => document.getElementById(id);
+  const msgInner = $("msg-inner");
+  const msgScroll = $("msg-scroll");
+  const textInput = $("text-input");
+  const sendBtn = $("send-btn");
+  const micBtn = $("mic-btn");
+  const modeLabel = $("mode-label");
+  const msgCount = $("msg-count");
+  const docList = $("doc-list");
+  const statDocs = $("stat-docs");
+  const statQuestions = $("stat-questions");
+  const statQuiz = $("stat-quiz");
+  const pillAsk = $("pill-ask");
+  const pillQuiz = $("pill-quiz");
+  const uploadBtn = $("upload-btn");
+  const fileInput = $("file-input");
+  const toastEl = $("toast");
+
+  function toast(text) {
+    toastEl.textContent = text;
+    toastEl.classList.add("show");
+    setTimeout(() => toastEl.classList.remove("show"), 2600);
+  }
+
+  function el(tag, attrs, children) {
+    const node = document.createElement(tag);
+    if (attrs) for (const k in attrs) {
+      if (k === "class") node.className = attrs[k];
+      else if (k === "html") node.innerHTML = attrs[k];
+      else node.setAttribute(k, attrs[k]);
+    }
+    (children || []).forEach((c) => { if (c) node.appendChild(c); });
+    return node;
+  }
+  function text(tag, cls, str) { const n = el(tag, cls ? { class: cls } : null); n.textContent = str; return n; }
+
+  const CITE_RE = /\(([^,()]+),\s*p\.\s*(\d+)\)/g;
+  function extractCitations(str) {
+    const out = [];
+    let m;
+    CITE_RE.lastIndex = 0;
+    while ((m = CITE_RE.exec(str))) out.push({ doc: m[1].trim(), page: parseInt(m[2], 10) });
+    return out;
+  }
+
+  // ---------- rendering ----------
+  function render() {
+    modeLabel.textContent = state.mode === "ask" ? "Ask" : "Quiz mode";
+    msgCount.textContent = state.messages.length + " messages";
+    textInput.placeholder = state.mode === "ask" ? "Ask about your notes…" : "Type your answer…";
+    pillAsk.classList.toggle("active", state.mode === "ask");
+    pillQuiz.classList.toggle("active", state.mode === "quiz");
+
+    statDocs.textContent = state.documents.length;
+    statQuestions.textContent = state.questionsToday;
+    if (state.quizGrades.length) {
+      const score = { correct: 1, partial: 0.5, wrong: 0 };
+      const avg = state.quizGrades.reduce((a, g) => a + (score[g] ?? 0), 0) / state.quizGrades.length;
+      statQuiz.textContent = Math.round(avg * 100) + "%";
+    } else {
+      statQuiz.textContent = "—";
+    }
+
+    renderDocs();
+    renderMessages();
+  }
+
+  function renderDocs() {
+    docList.innerHTML = "";
+    if (!state.documents.length) {
+      docList.appendChild(text("div", "doc-empty", "No documents yet — upload a PDF, .txt or .md."));
+      return;
+    }
+    state.documents.forEach((doc) => {
+      const row = el("div", { class: "doc-row" });
+      row.appendChild(el("div", { class: "doc-icon" }, [(() => {
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("width", "12"); svg.setAttribute("height", "12"); svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("fill", "none"); svg.setAttribute("stroke", "currentColor"); svg.setAttribute("stroke-width", "2");
+        svg.setAttribute("stroke-linecap", "round"); svg.setAttribute("stroke-linejoin", "round");
+        svg.innerHTML = '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path>';
+        return svg;
+      })()]));
+      row.appendChild(text("div", "doc-name", doc.name));
+      row.appendChild(text("div", "doc-meta", (doc.chunks ?? 0) + " chunks"));
+      const quizBtn = el("button", { class: "doc-quiz-btn" + (state.quizUnit === doc.id ? " active" : "") });
+      quizBtn.textContent = "Quiz";
+      quizBtn.addEventListener("click", () => startQuiz(doc.id));
+      row.appendChild(quizBtn);
+      const delBtn = el("button", { class: "doc-del-btn", title: "Delete", html:
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>' });
+      delBtn.addEventListener("click", () => deleteDoc(doc.id));
+      row.appendChild(delBtn);
+      docList.appendChild(row);
+    });
+  }
+
+  function renderMessages() {
+    msgInner.innerHTML = "";
+    state.messages.forEach((m) => msgInner.appendChild(renderMessage(m)));
+    msgScroll.scrollTop = msgScroll.scrollHeight;
+  }
+
+  function renderMessage(m) {
+    if (m.kind === "user") {
+      const row = el("div", { class: "row end" });
+      row.appendChild(text("div", "bubble-user", m.text));
+      return row;
+    }
+    if (m.kind === "voice-user") {
+      const row = el("div", { class: "row end" });
+      const bubble = el("div", { class: "bubble-user" });
+      const wrap = el("div", { class: "bubble-voice", html:
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 10v1a7 7 0 0 0 14 0v-1"></path><path d="M12 19v3"></path></svg>' });
+      wrap.style.color = "#fff";
+      const label = document.createElement("span");
+      label.textContent = m.text || "Voice question";
+      wrap.appendChild(label);
+      bubble.appendChild(wrap);
+      row.appendChild(bubble);
+      return row;
+    }
+    if (m.kind === "assistant") {
+      const row = el("div", { class: "row start" });
+      const bubble = el("div", { class: "bubble-assistant" });
+      bubble.appendChild(text("div", "bubble-text", m.text || "…"));
+      const cites = m.citations && m.citations.length ? m.citations : extractCitations(m.text || "");
+      if (cites.length) {
+        const chipRow = el("div", { class: "chip-row" });
+        const seen = new Set();
+        cites.forEach((c) => {
+          const key = c.doc + "|" + c.page;
+          if (seen.has(key)) return;
+          seen.add(key);
+          const chip = el("span", { class: "cite-chip", html:
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"></path><path d="M14 3v5h5"></path></svg>' });
+          chip.appendChild(document.createTextNode(" " + c.doc + " · p. " + c.page));
+          chipRow.appendChild(chip);
+        });
+        if (m.audio && m.audio.length) {
+          const playBtn = el("button", { class: "icon-btn" });
+          playBtn.textContent = "▶ Replay";
+          playBtn.addEventListener("click", () => playSentenceAudios(m.audio));
+          chipRow.appendChild(playBtn);
+        }
+        bubble.appendChild(chipRow);
+      } else if (m.audio && m.audio.length) {
+        const chipRow = el("div", { class: "chip-row" });
+        const playBtn = el("button", { class: "icon-btn" });
+        playBtn.textContent = "▶ Replay";
+        playBtn.addEventListener("click", () => playSentenceAudios(m.audio));
+        chipRow.appendChild(playBtn);
+        bubble.appendChild(chipRow);
+      }
+      row.appendChild(bubble);
+      return row;
+    }
+    if (m.kind === "quiz-grade") {
+      const row = el("div", { class: "row start" });
+      const bubble = el("div", { class: "bubble-assistant" });
+      const gradeCls = m.grade === "correct" ? "grade-correct" : m.grade === "partial" ? "grade-partial" : "grade-wrong";
+      const gradeLabel = m.grade === "correct" ? "Correct" : m.grade === "partial" ? "Partial" : "Wrong";
+      bubble.appendChild(el("div", { class: "quiz-grade " + gradeCls }, [text("span", null, gradeLabel)]));
+      if (m.missing) bubble.appendChild(text("div", "bubble-text", m.missing));
+      if (m.doc) {
+        const chipRow = el("div", { class: "chip-row" });
+        const chip = el("span", { class: "cite-chip" });
+        chip.textContent = m.doc + " · p. " + m.page;
+        chipRow.appendChild(chip);
+        bubble.appendChild(chipRow);
+      }
+      row.appendChild(bubble);
+      return row;
+    }
+    if (m.kind === "confirm") {
+      const row = el("div", { class: "row start" });
+      const card = el("div", { class: "confirm-card" });
+      const head = el("div", { class: "confirm-head", html:
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#D97757" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"></path><path d="M4 6l8 7 8-7"></path></svg>' });
+      head.appendChild(text("div", "confirm-title", "Confirm before sending"));
+      card.appendChild(head);
+      const fields = el("div", { class: "confirm-fields" });
+      const toRow = el("div", null, [text("span", "k", "To  "), document.createTextNode(m.args.to)]);
+      const subjRow = el("div", null, [text("span", "k", "Subject  "), document.createTextNode(m.args.subject)]);
+      const bodyRow = el("div", null, [text("span", "k", "Message  "), document.createTextNode(m.args.body)]);
+      fields.appendChild(toRow); fields.appendChild(subjRow); fields.appendChild(bodyRow);
+      card.appendChild(fields);
+      if (m.status === "pending") {
+        const actions = el("div", { class: "confirm-actions" });
+        const cancel = el("button", { class: "btn-cancel" }); cancel.textContent = "Cancel";
+        const confirm = el("button", { class: "btn-confirm" }); confirm.textContent = "Confirm";
+        cancel.addEventListener("click", () => resolvePending(m, "cancel"));
+        confirm.addEventListener("click", () => resolvePending(m, "confirm"));
+        actions.appendChild(cancel); actions.appendChild(confirm);
+        card.appendChild(actions);
+      } else if (m.status === "sent") {
+        card.appendChild(el("div", { class: "status-line status-sent", html:
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2F7D4F" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><span>Sent to your study group</span>' }));
+      } else if (m.status === "cancelled") {
+        card.appendChild(el("div", { class: "status-line status-cancelled" }, [text("span", null, "Cancelled — nothing was sent.")]));
+      } else if (m.status === "error") {
+        card.appendChild(el("div", { class: "status-line status-error" }, [text("span", null, m.errorText || "Something went wrong — nothing was sent.")]));
+      }
+      row.appendChild(card);
+      return row;
+    }
+    const row = el("div", { class: "row start" });
+    row.appendChild(text("div", "bubble-assistant", m.text || ""));
+    return row;
+  }
+
+  // ---------- API ----------
+  async function api(path, opts) {
+    const res = await fetch(API + path, opts);
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { detail = (await res.json()).detail || detail; } catch (e) {}
+      throw new Error(detail);
+    }
+    return res.status === 204 ? null : res.json();
+  }
+
+  async function loadDocuments() {
+    try {
+      state.documents = await api("/documents");
+      render();
+    } catch (e) { toast("Could not load documents: " + e.message); }
+  }
+
+  async function uploadFile(file) {
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      await api("/documents", { method: "POST", body: form });
+      toast("Uploaded " + file.name);
+      await loadDocuments();
+    } catch (e) { toast("Upload failed: " + e.message); }
+  }
+
+  async function deleteDoc(id) {
+    try {
+      await api("/documents/" + id, { method: "DELETE" });
+      if (state.quizUnit === id) { state.quizUnit = null; state.quizCurrent = null; }
+      await loadDocuments();
+    } catch (e) { toast("Delete failed: " + e.message); }
+  }
+
+  function addPendingIfAny(pendingAction) {
+    if (!pendingAction) return;
+    state.messages.push({ id: nextId++, kind: "confirm", pid: pendingAction.id,
+      args: pendingAction.args, status: "pending" });
+  }
+
+  async function resolvePending(m, action) {
+    try {
+      if (action === "cancel") {
+        await api("/cancel/" + m.pid, { method: "POST" });
+        m.status = "cancelled";
+      } else {
+        await api("/confirm/" + m.pid, { method: "POST" });
+        m.status = "sent";
+      }
+    } catch (e) {
+      m.status = "error";
+      m.errorText = e.message;
+    }
+    render();
+  }
+
+  // ---------- ask (text) ----------
+  async function sendAsk(question) {
+    state.messages.push({ id: nextId++, kind: "user", text: question });
+    state.sending = true;
+    updateSendState();
+    render();
+    try {
+      const res = await api("/ask", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, session_id: sessionId }),
+      });
+      state.questionsToday += 1;
+      state.messages.push({ id: nextId++, kind: "assistant", text: res.answer, citations: res.citations });
+      addPendingIfAny(res.pending_action);
+    } catch (e) {
+      state.messages.push({ id: nextId++, kind: "assistant", text: "Something went wrong: " + e.message });
+    }
+    state.sending = false;
+    updateSendState();
+    render();
+  }
+
+  // ---------- quiz ----------
+  async function startQuiz(docId) {
+    state.mode = "quiz";
+    state.quizUnit = docId;
+    state.messages = [];
+    render();
+    await fetchNextQuestion();
+  }
+
+  async function fetchNextQuestion() {
+    if (!state.quizUnit) return;
+    try {
+      const res = await api("/quiz/next", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unit: state.quizUnit }),
+      });
+      state.quizCurrent = res;
+      state.messages.push({ id: nextId++, kind: "assistant", text: res.question,
+        citations: [{ doc: res.doc, page: res.page }] });
+      render();
+    } catch (e) {
+      toast("Could not get a question: " + e.message);
+    }
+  }
+
+  async function sendQuizAnswer(answerText) {
+    if (!state.quizCurrent) { toast("Pick a document to quiz on first."); return; }
+    state.messages.push({ id: nextId++, kind: "user", text: answerText });
+    state.sending = true;
+    updateSendState();
+    render();
+    try {
+      const res = await api("/quiz/answer", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chunk_id: state.quizCurrent.chunk_id, answer: answerText, question: state.quizCurrent.question }),
+      });
+      state.quizGrades.push(res.grade);
+      state.messages.push({ id: nextId++, kind: "quiz-grade", grade: res.grade, missing: res.missing, doc: res.doc, page: res.page });
+      render();
+      await fetchNextQuestion();
+    } catch (e) {
+      state.messages.push({ id: nextId++, kind: "assistant", text: "Could not grade that: " + e.message });
+      render();
+    }
+    state.sending = false;
+    updateSendState();
+  }
+
+  // ---------- composer ----------
+  function updateSendState() {
+    sendBtn.disabled = state.sending || !textInput.value.trim();
+  }
+  textInput.addEventListener("input", updateSendState);
+  textInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  });
+  sendBtn.addEventListener("click", handleSend);
+
+  function handleSend() {
+    const value = textInput.value.trim();
+    if (!value || state.sending) return;
+    textInput.value = "";
+    updateSendState();
+    if (state.mode === "ask") sendAsk(value);
+    else sendQuizAnswer(value);
+  }
+
+  pillAsk.addEventListener("click", () => {
+    if (state.mode === "ask") return;
+    state.mode = "ask"; state.messages = []; state.quizUnit = null; state.quizCurrent = null;
+    render();
+  });
+  pillQuiz.addEventListener("click", () => {
+    if (state.mode === "quiz") return;
+    state.mode = "quiz"; state.messages = [];
+    render();
+    if (!state.quizUnit && state.documents.length) startQuiz(state.documents[0].id);
+    else if (!state.documents.length) toast("Upload a document, then click Quiz next to it.");
+  });
+
+  uploadBtn.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files[0];
+    fileInput.value = "";
+    if (file) uploadFile(file);
+  });
+
+  // ---------- voice ----------
+  let mediaRecorder = null;
+  let recordedChunks = [];
+  let mediaStream = null;
+
+  async function startRecording() {
+    if (state.mode !== "ask") { toast("Voice answers aren't wired up in quiz mode yet — type it in."); return; }
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      toast("Microphone access denied.");
+      return;
+    }
+    recordedChunks = [];
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+    mediaRecorder = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream);
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size) recordedChunks.push(e.data); };
+    mediaRecorder.start();
+    state.recording = true;
+    micBtn.classList.add("recording");
+  }
+
+  function stopRecording() {
+    return new Promise((resolve) => {
+      if (!mediaRecorder || mediaRecorder.state === "inactive") { resolve(null); return; }
+      mediaRecorder.onstop = () => {
+        mediaStream.getTracks().forEach((t) => t.stop());
+        resolve(new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" }));
+      };
+      mediaRecorder.stop();
+    });
+  }
+
+  micBtn.addEventListener("mousedown", (e) => { e.preventDefault(); startRecording(); });
+  micBtn.addEventListener("touchstart", (e) => { e.preventDefault(); startRecording(); }, { passive: false });
+  ["mouseup", "mouseleave"].forEach((evt) => micBtn.addEventListener(evt, async () => {
+    if (!state.recording) return;
+    state.recording = false;
+    micBtn.classList.remove("recording");
+    const blob = await stopRecording();
+    if (blob && blob.size > 0) sendVoice(blob);
+  }));
+  micBtn.addEventListener("touchend", async (e) => {
+    e.preventDefault();
+    if (!state.recording) return;
+    state.recording = false;
+    micBtn.classList.remove("recording");
+    const blob = await stopRecording();
+    if (blob && blob.size > 0) sendVoice(blob);
+  });
+
+  async function sendVoice(blob) {
+    const placeholder = { id: nextId++, kind: "voice-user", text: "" };
+    state.messages.push(placeholder);
+    const assistantMsg = { id: nextId++, kind: "assistant", text: "", citations: [], audio: [] };
+    state.messages.push(assistantMsg);
+    render();
+
+    const form = new FormData();
+    form.append("file", blob, "audio.webm");
+    form.append("session_id", sessionId);
+    form.append("t0", String(Date.now()));
+    form.append("config", "stream");
+
+    let res;
+    try {
+      res = await fetch(API + "/voice", { method: "POST", body: form });
+    } catch (e) {
+      assistantMsg.text = "Voice request failed: " + e.message;
+      render();
+      return;
+    }
+    if (!res.ok || !res.body) {
+      assistantMsg.text = "Voice request failed (" + res.status + ").";
+      render();
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let sentences = [];
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const line = chunk.split("\n").find((l) => l.startsWith("data: "));
+        if (!line) continue;
+        let payload;
+        try { payload = JSON.parse(line.slice(6)); } catch (e) { continue; }
+
+        if (payload.done) {
+          state.questionsToday += 1;
+          addPendingIfAny(payload.trace && payload.trace.pending_action);
+          if (!assistantMsg.text && payload.text) assistantMsg.text = payload.text;
+          render();
+          continue;
+        }
+        if (typeof payload.text === "string" && payload.audio_b64) {
+          sentences.push(payload.text);
+          assistantMsg.text = sentences.join(" ");
+          assistantMsg.audio.push({ mime: payload.mime_type || "audio/wav", b64: payload.audio_b64 });
+          queueAudio(payload.mime_type || "audio/wav", payload.audio_b64);
+          render();
+        }
+      }
+    }
+  }
+
+  function queueAudio(mime, b64) {
+    audioQueue.push(mime + "|" + b64);
+    if (!audioPlaying) playNextInQueue();
+  }
+  function playNextInQueue() {
+    const item = audioQueue.shift();
+    if (!item) { audioPlaying = false; return; }
+    audioPlaying = true;
+    const sep = item.indexOf("|");
+    const mime = item.slice(0, sep);
+    const b64 = item.slice(sep + 1);
+    const audio = new Audio("data:" + mime + ";base64," + b64);
+    audio.addEventListener("ended", playNextInQueue);
+    audio.addEventListener("error", playNextInQueue);
+    audio.play().catch(() => playNextInQueue());
+  }
+  function playSentenceAudios(audioList) {
+    audioList.forEach((a) => audioQueue.push(a.mime + "|" + a.b64));
+    if (!audioPlaying) playNextInQueue();
+  }
+
+  // ---------- boot ----------
+  loadDocuments();
+  render();
+})();
+</script>
+</body>
+</html>

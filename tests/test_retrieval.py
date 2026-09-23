@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from types import SimpleNamespace
 
-from backend import store
+from backend import llm, store
 from backend.ingest import Chunk
 from backend.retrieval import rlm_arm, router
 from backend.retrieval.base import Passage
@@ -25,6 +25,48 @@ def test_rlm_config_has_no_tools():
     assert kwargs["max_depth"] == 2
     assert kwargs["max_iterations"] == 15
     assert kwargs["environment"] == "recite-sandbox"
+
+
+def test_rlm_kwargs_names_the_rlm_model():
+    """The arm is driven by llm.rlm_llm, a model chosen for this loop
+    specifically — not llm.answer_llm, which never finalises an answer
+    through it (see EXPERIMENTS.md)."""
+    kwargs = rlm_arm.rlm_kwargs()
+    assert kwargs["backend_kwargs"]["model_name"] == llm.rlm_llm.model
+
+
+def test_strip_thought_removes_a_leaked_thought_block():
+    raw = "<thought>internal reasoning the model should not show</thought>```repl\nprint(1)\n```"
+    assert rlm_arm._strip_thought(raw) == "```repl\nprint(1)\n```"
+
+
+def test_strip_thought_is_a_noop_without_one():
+    raw = "```repl\nprint(1)\n```"
+    assert rlm_arm._strip_thought(raw) == raw
+
+
+def test_make_client_routes_through_rlm_llm_not_answer_llm(monkeypatch):
+    """The RLM arm must use its own model, and never fall back to the answer
+    model — they have different quotas and, per EXPERIMENTS.md, different
+    ability to drive this loop at all."""
+    calls = {"rlm": 0}
+
+    def fake_rlm_chat(messages, **kw):
+        calls["rlm"] += 1
+        msg = SimpleNamespace(content="<thought>plan</thought>```repl\nprint(1)\n```")
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+
+    def fail_if_called(*a, **kw):
+        raise AssertionError("the RLM arm must not call the answer model")
+
+    monkeypatch.setattr(llm.rlm_llm, "chat", fake_rlm_chat)
+    monkeypatch.setattr(llm.answer_llm, "chat", fail_if_called)
+
+    client = rlm_arm._make_client("gemma-4-26b-a4b-it")
+    result = client.completion("hello")
+
+    assert result == "```repl\nprint(1)\n```"
+    assert calls == {"rlm": 1}
 
 
 def _fake_rlm(response):

@@ -15,23 +15,32 @@ and what the result was. The run-by-run tables are in
 
 All numbers are from real Gemini calls, run with `python -m evals.run_evals`.
 Corpus: three lecture PDFs (63 pages). Embeddings arm, 3 runs per question.
+The `tune`/`report`/`heldout` rows below are current: run **after** the
+grounding-check fix (iteration 8).
 
 | Run | Chunks | Hit rate | Correct |
 | --- | --- | --- | --- |
 | `tune` (10 q), start: ~2-3 pages per chunk | 17 | 40% (12/30) | 63% (19/30) |
-| `tune`, one chunk per page | 60 | 100% (30/30) | 80% (24/30) |
-| `report` (15 q), one chunk per page | 60 | **100% (45/45)** | **82% (37/45)** |
+| `tune`, one chunk per page, pre grounding-fix | 60 | 100% (30/30) | 80% (24/30) |
+| `tune`, post grounding-fix | 60 | 100% (30/30) | 83% (25/30) |
+| `report` (15 q), pre grounding-fix | 60 | 100% (45/45) | 82% (37/45) |
+| `report`, post grounding-fix | 60 | **100% (45/45)** | **87% (39/45)** |
+| `heldout` (5 q), never tuned, run once | 60 | **100% (15/15)** | **100% (15/15)** |
 | Safety (4 injection, 3 legitimate, 2 should-not-refuse) | | attacks 0/12 | 5/6 |
+| Judge vs. human agreement (10 hand-labeled answers) | | | **10/10 (100%)** |
 
 - Hit rate = any expected page is among the retrieved passages (code, no model).
-- Correct = an LLM judge grades `correct | partial | wrong`. Agreement between
-  the judge and a human has **not** been measured yet.
-- `report` was never used for tuning, so it is the honest number. `heldout`
-  (5 questions) has not been run.
-- The `report`/`tune` rows were measured **before** the grounding-check fix in
-  iteration 8. That fix was verified only on the questions it affected (below),
-  not by a full rerun, so treat the full-split numbers as a slightly pessimistic
-  baseline.
+- Correct = an LLM judge grades `correct | partial | wrong`.
+- `report` was never used for tuning, and `heldout` was touched exactly once,
+  at the end, after everything else was settled — so both are honest numbers,
+  not numbers fit to the eval. `heldout` scoring 100% on questions the system
+  never saw during development is the strongest evidence that the chunking
+  and grounding-check fixes generalize.
+- The grounding-check fix moved `report`'s multihop type from 16/18 to 18/18
+  correct — exactly the failure mode it targeted. It did not move `lookup`
+  (still 12/18): every remaining wrong answer in `report`, and most of
+  `tune`'s, is image-only slide content (a graph, an equation) that has no
+  text layer to retrieve — see "What is still wrong" below.
 
 ## Iteration log
 
@@ -189,6 +198,34 @@ the failure was in our own claim splitting, not the model.
 - One unit test depended on an empty database; it now counts relative to what
   is already there.
 
+### 10. Confirming the fix, and a first `heldout` run
+
+The targeted rerun in iteration 8 covered only the 4 questions that had
+failed before, which is biased toward showing improvement. `tune` and
+`report` were rerun in full (3 runs each) on the fixed code, and `heldout`
+(5 questions, never touched before) was run for the first time:
+
+- `report`: correct 82% -> **87%** (37/45 -> 39/45). The gain is entirely in
+  the multihop type, 16/18 -> **18/18** — exactly the failure mode the fix
+  targeted. `lookup` is unchanged at 12/18: every remaining wrong answer
+  there is `lookup_06` or `lookup_09`, both image-only slide content with no
+  text layer, which the grounding fix was never going to touch.
+- `tune`: correct 80% -> 83% (24/30 -> 25/30). The remaining wrong runs are
+  `structural_02` (the same image-only issue) and `multihop_03` on 2 of 3
+  runs. Reading the trace, `multihop_03`'s refusal is a genuine `PARTIAL`
+  verdict, not a bug: the draft claims leakage "masks the true extent of the
+  gap," which the slides never state — that link is the model's own
+  inference, and the check is right to flag it.
+- `heldout`: **100% hit, 100% correct (15/15)**, run once and not reopened.
+  It was never used to tune chunking, the router thresholds or the grounding
+  prompt, so scoring 100% here is the honest signal that those fixes
+  generalize past the questions used to develop them.
+
+Judge agreement with a human grader was also measured for the first time,
+against the pre-fix result files: 10 hand-labeled answers, 10/10 agreement
+(`EXPERIMENTS.md`, Run 8). Full tables and per-question detail for both:
+`EXPERIMENTS.md`, Runs 8-9.
+
 ## Models and free-tier quotas
 
 Free-tier limits from the AI Studio rate-limit page (requests per minute /
@@ -218,11 +255,11 @@ per day):
 ## What is still wrong
 
 - **Image-only slide content is not retrievable.** Needs OCR or a vision pass
-  at ingest.
-- **Full-split numbers predate the grounding fix.** Rerun `report` and `tune`
-  after the daily quota resets.
-- **Judge agreement with a human is unmeasured.** Fill in
-  `evals/results/labels.csv`, then run `python -m evals.judge_agreement score`.
+  at ingest. This is now the entire remaining gap in `report` (`lookup_06`,
+  `lookup_09`) and most of it in `tune` (`structural_02`) — see iteration 10.
+- **Judge agreement was measured on pre-fix data, not the current `report`/
+  `tune` results.** 10/10 on the sample drawn from the old result files
+  (`EXPERIMENTS.md`, Run 8); worth re-sampling from the post-fix files.
 - **The eval is easy.** With 60 chunks and the top 5 retrieved, about 8% of the
   corpus comes back on every query, so a 100% hit rate mostly shows the corpus
   is small. Reranking and the RLM arm cannot show a benefit until the suite has

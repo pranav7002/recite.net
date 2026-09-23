@@ -51,13 +51,30 @@ _STRIP_BUILTINS = frozenset({
 # "(name, p. 14, 17)" — multi-page aware, unlike the single-page CITE regex.
 _CITE_MULTI = re.compile(r"\(([^,()]+),\s*p\.\s*([\d,\s]+)\)")
 
+# Some free-tier models (gemma-4-26b-a4b-it) wrap their real output in a
+# <thought>...</thought> block before the actual response. The rlms library's
+# code-block parser looks for a ```repl fence anywhere in the text, so a
+# leaked thought block ahead of it does not by itself break parsing — but it
+# wastes tokens and adds latency on every call, so it is stripped before the
+# text leaves this client. No-op for models that don't leak one.
+_THOUGHT_RE = re.compile(r"<thought>.*?</thought>\s*", re.DOTALL)
+
+
+def _strip_thought(text: str) -> str:
+    return _THOUGHT_RE.sub("", text).strip()
+
 
 def _doc_key(name: str) -> str:
     return Path(name).stem.lower()
 
 
 def _make_client(model_name: str):
-    """A duck-typed BaseLM whose calls go through llm.answer_llm."""
+    """A duck-typed BaseLM whose calls go through llm.rlm_llm — a model chosen
+    for this arm specifically, not the answer model. gemini-3.1-flash-lite
+    (500/day) plans forever and never finalises a grounded answer through the
+    rlms code-execution loop; gemma-4-26b-a4b-it (14,400/day) does, in a live
+    test, once _strip_thought() removes its <thought> leakage. See
+    EXPERIMENTS.md for the run that established this."""
     from rlm.core.types import ModelUsageSummary, UsageSummary
 
     class RateLimitedGemini:
@@ -66,8 +83,8 @@ def _make_client(model_name: str):
 
         def completion(self, prompt, model=None) -> str:
             messages = [{"role": "user", "content": prompt}] if isinstance(prompt, str) else prompt
-            resp = llm.answer_llm.chat(messages)
-            return resp.choices[0].message.content or ""
+            resp = llm.rlm_llm.chat(messages)
+            return _strip_thought(resp.choices[0].message.content or "")
 
         async def acompletion(self, prompt, model=None) -> str:
             return await asyncio.to_thread(self.completion, prompt, model)
@@ -168,7 +185,7 @@ def rlm_kwargs() -> dict:
     code running over untrusted document text."""
     return {
         "backend": BACKEND_NAME,
-        "backend_kwargs": {"model_name": llm.answer_llm.model},
+        "backend_kwargs": {"model_name": llm.rlm_llm.model},
         "environment": SANDBOX_ENV_NAME,
         "max_depth": MAX_DEPTH,
         "max_iterations": MAX_ITERATIONS,

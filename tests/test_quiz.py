@@ -94,8 +94,9 @@ def test_grade_correct_clears_miss(monkeypatch):
 
 def test_miss_is_recorded_then_cleared_in_db(db):
     # Real store round trip inside the rolled-back test transaction.
-    from backend.ingest import Chunk as C
     import numpy as np
+
+    from backend.ingest import Chunk as C
     chunk = C(id="docq:0", doc_id="docq", doc_name="q.pdf", page=1, section=None,
               text="The mean is fifty.")
     store.add(doc_id="docq", name="q.pdf", full_text="[[page 1]]\nThe mean is fifty.",

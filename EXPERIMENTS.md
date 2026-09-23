@@ -230,8 +230,83 @@ iterations and the fallback prompt also yielded another plan. The `rlms`
 code-execution loop is designed for GPT-5/Claude-class models; Flash-Lite
 (chosen for its 500/day free quota) cannot reliably follow it, and full Flash is
 capped at 20/day, so there is no free-tier model that both drives the RLM and
-sustains an eval. The RLM arm is therefore built and honest, but expected to
-measure poorly until a stronger model is available.
+sustains an eval.
+
+## Run 10: a free-tier model that can drive the RLM loop, and wiring it in
+
+Tested whether any free-tier model could finish the `rlms` loop where
+`gemini-3.1-flash-lite` couldn't. `gemma-4-26b-a4b-it` has 14,400/day (vs.
+500/day for Flash-Lite, 20/day for full Flash) — the only model with enough
+quota headroom to both drive a 15-iteration RLM search and still sustain an
+eval — but it was previously untested for this specific loop; the only prior
+Gemma note was that it works for plain JSON mode and tool calls (Day 3,
+above).
+
+**Live test, one question, `structural_01`** ("sequential steps ... Data
+Preprocessing Pipeline"): completed in 55.8s over 3 model calls, and the
+final answer — *Data cleaning → Handle missing data → Outlier detection &
+treatment → Transform & scale → Encode categoricals* — cited
+`DAI-101_Lecture_4..., p. 9`, the exact page in this case's `expected_pages`.
+One fix was needed to get there: Gemma wraps every response in
+`<thought>...</thought>` before its real output (the leak noted on Day 3);
+stripped before the text reaches the `rlms` parser, in
+`rlm_arm._strip_thought()`.
+
+**Wired into `backend/retrieval/rlm_arm.py` and `backend/llm.py`:**
+
+- New `llm.rlm_llm`, a client instance separate from `answer_llm`/`check_llm`
+  (`RLM_MODEL=gemma-4-26b-a4b-it`, 5 RPM / 14,000 RPD in `.env` — the RPM
+  matches the ~5-calls-a-minute practical cap from Gemma's 16K
+  tokens-per-minute limit, not its nominal 30 RPM). Defaulted in code, not
+  required, so an unset `RLM_MODEL` doesn't break every other model's import.
+- `rlm_arm._make_client()` now calls `llm.rlm_llm.chat()`, not
+  `llm.answer_llm.chat()`, and strips the `<thought>` block via
+  `_strip_thought()` before handing text to the `rlms` code-block parser.
+- Four new unit tests (`tests/test_retrieval.py`): `rlm_kwargs()` names
+  `llm.rlm_llm.model`; `_strip_thought()` removes a leaked block and is a
+  no-op without one; the client's `completion()` calls `rlm_llm.chat` and
+  asserts `answer_llm.chat` is never touched (the two arms must stay on
+  separate quotas — and, per the finding above, only one of them can
+  actually finish this loop).
+
+**Validated on two more `tune` questions through the real, wired-in
+`RLMRetriever()`** (not a monkeypatched script this time): `lookup_01`
+("population variance formula") returned p. 2, the exact expected page.
+`multihop_02` (CGPA / MNAR) returned p. 11, also the exact expected page —
+the same page `structural_05` expects for the MCAR/MAR/MNAR table, which
+checks out since MNAR is a row in that table. **3 of 3 live tests have now
+landed on the exact expected page** (`structural_01` p. 9 above, plus these
+two) — real signal, not a one-question fluke.
+
+**But latency is a real, unresolved problem, and much worse than the first
+run suggested.** `structural_01` took 56s; `lookup_01` took **403.8s** (6.7
+min) and `multihop_02` took **594.9s** (9.9 min) — both roughly 10x the first
+run, for questions that don't look obviously harder. The RPM limiter (5
+calls/min) caps the flat cost of iteration count at ~12s/call, which can't
+explain a 10-minute answer on its own; the likely cause is `llm.py`'s
+429-retry backoff (`time.sleep(min(60, 2**attempt))`, up to 5 attempts)
+firing repeatedly, because the RLM conversation's token count *grows every
+iteration* (each turn resends the full document context plus history), so
+a later call can blow past Gemma's ~16K-tokens/minute cap even while under
+the 5-calls/minute limiter. This is a hypothesis, not yet confirmed: the
+arm's current tracing (`trace.record(op="rlm", wall_s=...)`) only logs one
+number for the whole search, not per-call wait-vs-model time or iteration
+count, so there's no way yet to tell backoff time from genuine model time.
+
+**Not yet done, in order:**
+1. Add per-call instrumentation to `rlm_arm.py` (iteration count, and
+   wait-vs-model time split, matching what `llm.py` already does for the
+   other arms) so the 400-600s runs can actually be diagnosed instead of
+   guessed at.
+2. Depending on what that shows: either the backoff hypothesis is right, in
+   which case the fix is capping context growth (e.g. truncating older
+   iterations from the history) or lowering RPM further to leave TPM
+   headroom — or it isn't, in which case something else is generating extra
+   iterations and that needs its own look.
+3. Only then run this through the eval suite (`--arm rlm` / `--arm
+   router`): at 1-10 minutes a question, an unthrottled `tune`-split run
+   could take well over an hour, which is fine for quota (14,400/day) but
+   not yet fine for "does this run overnight reliably."
 
 ## Findings
 
@@ -249,15 +324,73 @@ measure poorly until a stronger model is available.
    day; the Flash-Lite models are 500. Latency numbers in these runs are mostly
    rate-limit waiting, not model time (one call took ~600 s).
 
+## Run 8: judge agreement with human labels (10 answers)
+
+`python -m evals.judge_agreement sample` drew 10 answers round-robin across
+question types from the most recent (pre-fix) `report`/`tune` result files;
+`labels_key.json` holds the judge's grade for each, hidden from the sheet.
+Hand-graded blind, then `python -m evals.judge_agreement score`:
+
+| Human | Judge | Count |
+| --- | --- | --- |
+| correct | correct | 6 |
+| wrong | wrong | 4 |
+
+**Agreement: 10/10 (100%).** All 6 human-correct answers were graded correct
+by the judge; all 4 human-wrong answers (three "I couldn't find that in your
+notes" refusals plus one incomplete answer) were graded wrong. No case in this
+sample landed on `partial`, so this sample doesn't exercise judge/human
+agreement on partial credit specifically. Files: `evals/results/labels.csv`,
+`evals/results/labels_key.json`.
+
+## Run 9: `tune` + `report` rerun after the grounding fix, and first `heldout` run
+
+Same 3-runs-per-case methodology as Runs 3/4, on the current code
+(`backend/grounding.py` as fixed in Run 7). `heldout` (5 questions) run for
+the first time, per the rule of touching it once, at the end.
+
+| Split | n | Hit rate | Correct | vs. before the fix |
+| --- | --- | --- | --- | --- |
+| `tune` | 30 | 100% | 83% (25/30) | 80% (24/30), Run 4 |
+| `report` | 45 | 100% | 87% (39/45) | 82% (37/45), Run 3 |
+| `heldout` | 15 | 100% | **100% (15/15)** | not run before |
+
+Files: `evals/results/20260922_072435_retrieval_embeddings_tune.*`,
+`20260922_073232_retrieval_embeddings_report.*`,
+`20260922_073647_retrieval_embeddings_heldout.*`.
+
+**Where the gain is, and isn't.** `report`'s multihop type went from 16/18 to
+**18/18** — that's the grounding-check fix doing its job on exactly the
+question type it was breaking (Run 3 attributed those wrong answers to
+grounding-check refusals of correct claims). `report`'s lookup type is
+unchanged at 12/18: all 6 wrong runs are `lookup_06` and `lookup_09`, both
+image-only slide content (a graph, an equation with no text layer) — a
+retrieval/extraction gap the grounding fix was never going to touch. `tune`
+moved less (80% -> 83%) and its remaining wrong runs are `structural_02`
+(same image-only equation) and `multihop_03` (2 of 3 runs): read the full
+trace on the third run and the `PARTIAL` verdict is genuine, not a bug —
+the draft claims leakage "masks the true extent of the gap," which the
+slides never state (they say leakage makes performance look better, and
+separately that overfitting is a large gap; the link is the model's own
+inference). Same conclusion as Run 7, now confirmed on a fresh run.
+
+**`heldout` at 100%, never tuned or touched before now,** is the strongest
+single number in the eval: it says the 40%-to-100% chunking fix and the
+grounding-check fix generalize past the 25 questions used to develop them,
+not just fit them.
+
+**Not yet resolved:** image-only slide content (`lookup_06`, `lookup_09`,
+`structural_02`) still needs OCR or a vision pass at ingest — that's the
+entire remaining gap in `report` and most of it in `tune`.
+
 ## Open items
 
 - Local voice latency: one live `stream` turn, then the 20 × 5 × 3 config run.
-
-- Judge agreement with human labels (10 answers): run
-  `python -m evals.judge_agreement sample`, fill in
-  `evals/results/labels.csv`, then `python -m evals.judge_agreement score`.
-- Rerun the full `report` and `tune` splits after the grounding fix (needs a
-  fresh daily quota) to measure the real gain.
-- Image-only slides: OCR or a vision pass at ingest.
-- `heldout` split has not been run and should be run once, at the end.
+- Image-only slides: OCR or a vision pass at ingest. This is now the single
+  biggest lever left on the retrieval-suite numbers (see Run 9).
 - Provenance rule: no live-eval evidence yet (unit test only).
+- The judge-agreement sample (Run 8) was drawn from result files that predate
+  the grounding-check fix; worth re-sampling from the Run 9 files to check
+  agreement holds on them too.
+- `heldout` has now been run once, per the rule of not touching it again
+  unless the eval itself changes materially.

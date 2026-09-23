@@ -130,6 +130,18 @@ check_llm = LLM(
     int(os.getenv("CHECK_MODEL_RPD", "1000")),
 )
 
+# The model that drives the RLM arm's code-execution loop (backend/retrieval/
+# rlm_arm.py). gemini-3.1-flash-lite (the answer model, 500/day) plans forever
+# and never finalises a grounded answer through that loop; gemma-4-26b-a4b-it
+# (14,400/day) does, once its <thought> leakage is stripped — see
+# EXPERIMENTS.md. Defaulted rather than required: an unset RLM_MODEL should
+# not break every other model's import.
+rlm_llm = LLM(
+    os.getenv("RLM_MODEL", "gemma-4-26b-a4b-it"),
+    int(os.getenv("RLM_MODEL_RPM", "5")),
+    int(os.getenv("RLM_MODEL_RPD", "14000")),
+)
+
 
 # ---- embeddings (native google-genai: the compat layer lacks output dims) ----
 

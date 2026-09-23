@@ -296,20 +296,76 @@ arm's current tracing (`trace.record(op="rlm", wall_s=...)`) only logs one
 number for the whole search, not per-call wait-vs-model time or iteration
 count, so there's no way yet to tell backoff time from genuine model time.
 
-**Not yet done, in order:**
-1. Add per-call instrumentation to `rlm_arm.py` (iteration count, and
-   wait-vs-model time split, matching what `llm.py` already does for the
-   other arms) so the 400-600s runs can actually be diagnosed instead of
-   guessed at.
-2. Depending on what that shows: either the backoff hypothesis is right, in
-   which case the fix is capping context growth (e.g. truncating older
-   iterations from the history) or lowering RPM further to leave TPM
-   headroom — or it isn't, in which case something else is generating extra
-   iterations and that needs its own look.
-3. Only then run this through the eval suite (`--arm rlm` / `--arm
-   router`): at 1-10 minutes a question, an unthrottled `tune`-split run
-   could take well over an hour, which is fine for quota (14,400/day) but
-   not yet fine for "does this run overnight reliably."
+## Trigger 3 wired in, and the real RLM latency cause (2026-09-23)
+
+**Router trigger 3.** `Router.escalate()` now force-calls the RLM arm
+regardless of the score/section triggers, and `backend.agent`'s redraft step
+(`_redraft_after_escalation`) calls it when a grounding check fails on the
+embeddings arm's passages, merging any fresh RLM passages into context before
+the model retries. A no-op for the plain embeddings retriever. Covered by new
+tests in `test_agent.py` and `test_retrieval.py`.
+
+**The 429-backoff hypothesis was wrong.** Added per-call instrumentation
+first, as planned: `LLM.chat()` now records `backoff_s` (previously the
+429-retry sleeps vanished entirely — only the successful attempt's `call_s`
+was ever traced), and `RLMRetriever.search()` wraps the whole loop in
+`trace.capture()` to attribute a search's wall time to waiting, backoff, or
+genuine model time. A real, live `RLMRetriever().search()` call on the actual
+corpus then showed `backoff_s: 0.0` across all 7 calls, yet `wall_s: 432.8`
+vastly exceeded `wait_s + model_s` (93.5s) — a ~340s gap with **no** rate-limit
+wait, no backoff, and no model call visible at all in the trace. Backoff was
+never the dominant cost.
+
+**Deeper instrumentation (wrapping `LocalREPL.execute_code` and `RLM`'s
+`on_iteration_*` callbacks) found the real cause: one single Gemini call took
+619.6 seconds to return, with no exception raised.** `_chat_client()` had no
+`timeout=`, so a slow response just hung — not a retry, not a rate limit,
+just an open connection nothing bounded. Separately, the `openai` SDK's own
+built-in retry layer (`max_retries=2` by default) was firing its own
+backoff-and-retry *inside* individual `create()` calls, invisible to
+`trace.record()`, so our instrumentation was only ever seeing a fraction of
+each call's real retry behavior. `attempts: 5, backoff_s: 16.0, call_s:
+619.6` on the record that finally succeeded is the fifth of *our* attempts,
+whose single HTTP call itself took over ten minutes.
+
+**Fix, in `backend/llm.py`:**
+- `REQUEST_TIMEOUT_S` (45s, `LLM_REQUEST_TIMEOUT_S` env override) and
+  `max_retries=0` on the shared OpenAI client, so our own retry loop in
+  `LLM.chat()` is the only one — no more hidden SDK-level retries stacking on
+  top of it, and no more calls that can hang indefinitely instead of erroring.
+- `LLM.chat()` now also catches `APIConnectionError` (`APITimeoutError` is a
+  subclass of it), so a call that hits the new timeout gets retried through
+  the same traced backoff loop instead of crashing the turn.
+
+**And in `backend/retrieval/rlm_arm.py`:**
+- `MAX_TIMEOUT_S` (60s, `RLM_MAX_TIMEOUT_S` env override) passed to `RLM(...)`
+  as a second, coarser ceiling across the whole multi-iteration search — a
+  safety net for several individually-fine calls adding up, since
+  `rlm.core.rlm` only checks this *between* iterations, not while a call is
+  in flight (that's what the per-call timeout above is for).
+- `RLMRetriever.search()` now catches `TimeoutExceededError` and uses
+  `e.partial_answer` if the RLM had one when it gave up, else falls through
+  to an empty result — which `Router.escalate()`'s caller already treats as
+  "no better than the embeddings hits," so a timeout degrades gracefully
+  instead of crashing the turn or blocking it indefinitely.
+
+**Confirmed on the real corpus, same question that took 432.8s before the
+fix:** wall time dropped to **114.3s** — bounded, no crash. This run's timeout
+fired mid-search (one call still hit the 45s per-call cap and needed a retry,
+so the cumulative multi-iteration time crossed the 60s ceiling before the next
+iteration's check could catch it), so it returned an empty result rather than
+an answer; the router's existing embeddings fallback covers that case.
+
+**This is a real fix, not a full one.** 114s (and, in the worst realistic
+case, a bit more — the per-call cap is 45s and the multi-call ceiling is a
+between-iterations check, not a hard cutoff) is a large, bounded improvement
+over an unbounded 400-600s hang, but it is still far past what a synchronous
+voice turn can tolerate. Closing that gap further needs a product decision
+this fix doesn't make on its own: either a faster (likely paid) model for
+this arm specifically, or not escalating to RLM synchronously inside a live
+voice turn at all (e.g. a filler utterance while it runs, or restricting
+escalation to the text/`/ask` path). Flagging this rather than picking one
+silently.
 
 ## Findings
 

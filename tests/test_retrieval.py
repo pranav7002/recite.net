@@ -25,6 +25,7 @@ def test_rlm_config_has_no_tools():
     assert kwargs["max_depth"] == 2
     assert kwargs["max_iterations"] == 15
     assert kwargs["environment"] == "recite-sandbox"
+    assert kwargs["max_timeout"] == rlm_arm.MAX_TIMEOUT_S
 
 
 def test_rlm_kwargs_names_the_rlm_model():
@@ -81,6 +82,16 @@ def _fake_rlm(response):
     return FakeRLM()
 
 
+def _fake_rlm_timeout(partial_answer):
+    from rlm import TimeoutExceededError
+
+    class FakeRLM:
+        def completion(self, prompt, root_prompt=None):
+            raise TimeoutExceededError(elapsed=70.0, timeout=60.0, partial_answer=partial_answer)
+
+    return FakeRLM()
+
+
 def test_rlm_retriever_maps_citations_to_passages(monkeypatch):
     monkeypatch.setattr(store, "get_doc_texts", lambda: [
         {"doc_id": "d1", "name": "notes.pdf", "text": "[[page 3]]\nthe answer text"},
@@ -100,6 +111,27 @@ def test_rlm_retriever_ignores_unknown_documents(monkeypatch):
     ])
     monkeypatch.setattr(store, "get_chunks_by_page", lambda name, page: [])
     retriever = rlm_arm.RLMRetriever(rlm=_fake_rlm("Answer (elsewhere.pdf, p. 9)."))
+    assert retriever.search("q") == []
+
+
+def test_rlm_retriever_uses_partial_answer_on_timeout(monkeypatch):
+    """MAX_TIMEOUT_S exceeded: use whatever citation the RLM had produced
+    before rlm.core.rlm raised TimeoutExceededError, instead of crashing the
+    turn or blocking it for however long the library would otherwise run."""
+    monkeypatch.setattr(store, "get_doc_texts", lambda: [
+        {"doc_id": "d1", "name": "notes.pdf", "text": "[[page 3]]\nthe answer text"},
+    ])
+    monkeypatch.setattr(store, "get_chunks_by_page", lambda name, page: [
+        Chunk(id="d1:0", doc_id="d1", doc_name=name, page=page, section=None, text="the answer text"),
+    ])
+    retriever = rlm_arm.RLMRetriever(rlm=_fake_rlm_timeout("So far: X (notes.pdf, p. 3)."))
+    passages = retriever.search("what is X?")
+    assert [p.doc_name for p in passages] == ["notes.pdf"]
+
+
+def test_rlm_retriever_empty_on_timeout_with_no_partial_answer(monkeypatch):
+    monkeypatch.setattr(store, "get_doc_texts", lambda: [{"doc_id": "d1", "name": "notes.pdf", "text": "text"}])
+    retriever = rlm_arm.RLMRetriever(rlm=_fake_rlm_timeout(None))
     assert retriever.search("q") == []
 
 

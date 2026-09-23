@@ -84,11 +84,22 @@ def test_audio_is_wav_wrapped():
                                   stt=lambda b: "q", tts=_fake_tts(),
                                   answer=_fake_answer([])))
     import base64
-    raw = base64.b64decode(items[0]["audio_b64"])
+    audio_item = next(i for i in items if "audio_b64" in i)
+    raw = base64.b64decode(audio_item["audio_b64"])
     assert raw[:4] == b"RIFF" and raw[8:12] == b"WAVE"
     with wave.open(io.BytesIO(raw), "rb") as w:
         assert w.getframerate() == 24000
         assert w.getnchannels() == 1
+
+
+def test_transcript_sent_before_the_answer():
+    """So the browser can show what it heard while the (often much slower)
+    answer is still being generated."""
+    items = _run(voice.voice_turn(b"audio", None, 0.0, "stream",
+                                  stt=lambda b: "what is the mean", tts=_fake_tts(),
+                                  answer=_fake_answer([])))
+    assert items[0] == {"transcript": "what is the mean"}
+    assert "audio_b64" not in items[0]
 
 
 def test_marks_recorded():

@@ -90,6 +90,16 @@
   .bubble-voice { font-size: 13px; color: var(--text-muted); font-style: italic; display: flex; align-items: center; gap: 6px; }
   .ttfa-note { font-size: 11px; color: var(--text-muted); }
 
+  .typing-dots { display: flex; align-items: center; gap: 4px; padding: 3px 0; }
+  .typing-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted);
+                       opacity: .3; animation: typingBounce 1.2s ease-in-out infinite; }
+  .typing-dots span:nth-child(2) { animation-delay: .15s; }
+  .typing-dots span:nth-child(3) { animation-delay: .3s; }
+  @keyframes typingBounce {
+    0%, 60%, 100% { opacity: .3; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-3px); }
+  }
+
   .chip-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .cite-chip { display: inline-flex; align-items: center; gap: 5px; background: #FBF0E8; color: #9A5433; font-size: 11px;
                font-weight: 700; padding: 5px 9px; border-radius: 999px; }
@@ -375,7 +385,12 @@
     if (m.kind === "assistant") {
       const row = el("div", { class: "row start" });
       const bubble = el("div", { class: "bubble-assistant" });
-      bubble.appendChild(mathText("div", "bubble-text", m.text || "…"));
+      if (!m.text) {
+        bubble.appendChild(el("div", { class: "typing-dots" }, [el("span"), el("span"), el("span")]));
+        row.appendChild(bubble);
+        return row;
+      }
+      bubble.appendChild(mathText("div", "bubble-text", m.text));
       const cites = m.citations && m.citations.length ? m.citations : extractCitations(m.text || "");
       if (cites.length) {
         const chipRow = el("div", { class: "chip-row" });
@@ -524,6 +539,8 @@
   // ---------- ask (text) ----------
   async function sendAsk(question) {
     state.messages.push({ id: nextId++, kind: "user", text: question });
+    const assistantMsg = { id: nextId++, kind: "assistant", text: "", citations: [] };
+    state.messages.push(assistantMsg);
     state.sending = true;
     updateSendState();
     render();
@@ -533,10 +550,11 @@
         body: JSON.stringify({ question, session_id: sessionId }),
       });
       state.questionsToday += 1;
-      state.messages.push({ id: nextId++, kind: "assistant", text: res.answer, citations: res.citations });
+      assistantMsg.text = res.answer;
+      assistantMsg.citations = res.citations;
       addPendingIfAny(res.pending_action);
     } catch (e) {
-      state.messages.push({ id: nextId++, kind: "assistant", text: "Something went wrong: " + e.message });
+      assistantMsg.text = "Something went wrong: " + e.message;
     }
     state.sending = false;
     updateSendState();
@@ -666,6 +684,11 @@
         let payload;
         try { payload = JSON.parse(line.slice(6)); } catch (e) { continue; }
 
+        if (typeof payload.transcript === "string") {
+          placeholder.text = payload.transcript;
+          render();
+          continue;
+        }
         if (payload.done) {
           state.questionsToday += 1;
           addPendingIfAny(payload.trace && payload.trace.pending_action);

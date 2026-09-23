@@ -26,7 +26,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from backend import agent, llm, speech
+from backend import agent, llm, speech, trace
 from backend.speakable import speakable
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -121,6 +121,10 @@ async def voice_turn(
                "trace": {"config": config, "empty": True}}
         return
 
+    # Sent before the answer loop runs, so the browser can show what it heard
+    # while the (often much slower) answer is still being generated.
+    yield {"transcript": transcript}
+
     if intercept is not None:
         reply = await asyncio.to_thread(intercept, transcript)
         if reply is not None:
@@ -133,9 +137,16 @@ async def voice_turn(
                    "trace": {"config": config, "intercepted": True, "transcript": transcript}}
             return
 
-    result = await asyncio.to_thread(answer, transcript, history=history,
-                                     check_grounding=config != "stream_nocheck")
+    # capture() collects every model call's wait/backoff/call time (to_thread
+    # copies this context into the worker), so the latency runner can report
+    # time-to-first-audio with the free-tier limiter waits taken out.
+    with trace.capture() as calls:
+        result = await asyncio.to_thread(answer, transcript, history=history,
+                                         check_grounding=config != "stream_nocheck")
     marks["answer_ready_ms"] = round((time.monotonic() - arrival) * 1000, 1)
+    t = trace.timings(calls)
+    marks.update(wait_ms=round(t["wait_s"] * 1000, 1), backoff_ms=round(t["backoff_s"] * 1000, 1),
+                 model_ms=round(t["model_s"] * 1000, 1), model_calls=t["calls"])
     if record is not None:
         record(transcript, result.text)
     if pending is not None and result.pending_action is not None:

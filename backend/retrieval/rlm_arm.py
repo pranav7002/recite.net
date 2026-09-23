@@ -28,6 +28,7 @@ available through the library as shipped.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 from pathlib import Path
@@ -40,6 +41,19 @@ BACKEND_NAME = "recite-gemini"
 SANDBOX_ENV_NAME = "recite-sandbox"
 MAX_DEPTH = 2
 MAX_ITERATIONS = 15
+# Overall ceiling across every iteration and sub-call, not per call: llm.py's
+# REQUEST_TIMEOUT_S already bounds any single call, but several iterations of
+# ordinary-length calls can still add up. rlm.core.rlm checks this between
+# iterations (not while a call is in flight), so it's a second, coarser net —
+# past it the loop stops and returns its best answer so far, or none, which
+# Router.escalate()'s caller already treats as "no better than embeddings."
+# 60s cut every one of 3 known-good tune questions off before they converged
+# (0/3 hit rate, down from 3/3 with no ceiling at all) — this arm's iteration
+# loop genuinely needs more than a minute on this free-tier model. 120s still
+# bounds the 400-620s pathological cases by 3-5x; it does not make this arm
+# fast enough for a synchronous voice turn — that needs a faster model for
+# this arm or not escalating inside a live voice turn (EXPERIMENTS.md).
+MAX_TIMEOUT_S = float(os.getenv("RLM_MAX_TIMEOUT_S", "120"))
 
 # Builtins removed from the REPL namespace: the file and import primitives, plus
 # the common introspection primitives used to reach them (object.__subclasses__).
@@ -189,6 +203,7 @@ def rlm_kwargs() -> dict:
         "environment": SANDBOX_ENV_NAME,
         "max_depth": MAX_DEPTH,
         "max_iterations": MAX_ITERATIONS,
+        "max_timeout": MAX_TIMEOUT_S,
     }
 
 
@@ -254,6 +269,8 @@ class RLMRetriever:
         self._rlm = rlm
 
     def search(self, query: str, k: int = 5) -> list[Passage]:
+        from rlm import TimeoutExceededError
+
         docs = store.get_doc_texts()
         if not docs:
             return []
@@ -266,10 +283,21 @@ class RLMRetriever:
         # guessed at. asyncio.to_thread (used by acompletion for recursive
         # sub-calls) copies the current context into its worker thread, so
         # this still sees calls made off the main thread.
+        timed_out = False
         with trace.capture() as calls:
-            completion = rlm.completion(_build_context(docs), root_prompt=_root_prompt(query))
+            try:
+                completion = rlm.completion(_build_context(docs), root_prompt=_root_prompt(query))
+                response = completion.response
+            except TimeoutExceededError as e:
+                # MAX_TIMEOUT_S exceeded (rlm.core.rlm checks this between
+                # iterations, not while a call is in flight — llm.py's own
+                # REQUEST_TIMEOUT_S is what bounds a single stuck call). Use
+                # whatever partial answer it had; empty is fine too, since the
+                # router already falls back to the embeddings hits on empty.
+                timed_out = True
+                response = e.partial_answer or ""
         t = trace.timings(calls)
         trace.record(op="rlm", wall_s=round(time.monotonic() - started, 3),
                      wait_s=t["wait_s"], backoff_s=t["backoff_s"], model_s=t["model_s"],
-                     calls=t["calls"])
-        return _answer_to_passages(completion.response, docs)[:k]
+                     calls=t["calls"], timed_out=timed_out)
+        return _answer_to_passages(response, docs)[:k]

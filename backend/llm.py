@@ -22,7 +22,7 @@ import numpy as np
 from dotenv import load_dotenv
 from google.genai import errors as genai_errors
 from google.genai import types
-from openai import InternalServerError, OpenAI, RateLimitError
+from openai import APIConnectionError, InternalServerError, OpenAI, RateLimitError
 
 from backend import store, trace
 
@@ -44,6 +44,16 @@ TTS_RPM = float(os.getenv("TTS_RPM", "15"))
 TTS_RPD = int(os.getenv("TTS_RPD", "500"))
 STT_RPM = float(os.getenv("STT_RPM", "15"))
 STT_RPD = int(os.getenv("STT_RPD", "500"))
+
+# Per-request timeout for the chat client, and no SDK-level retries. Without
+# an explicit timeout, a free-tier call can just hang instead of erroring: a
+# live RLM run measured one single call at 619.6s with no exception raised
+# (EXPERIMENTS.md, "Trigger 3 wired in, and the real RLM latency cause").
+# max_retries=0 turns off the openai SDK's own hidden retry-with-backoff
+# (default 2 extra attempts per call, invisible to trace.record): LLM.chat()
+# below is the only retry loop now, so wait_s/backoff_s/call_s account for
+# 100% of a call's wall time instead of some unknown fraction of it.
+REQUEST_TIMEOUT_S = float(os.getenv("LLM_REQUEST_TIMEOUT_S", "45"))
 
 
 def _required(name: str) -> str:
@@ -121,7 +131,11 @@ class LLM:
                              backoff_s=round(backoff, 3), call_s=round(time.monotonic() - t, 3),
                              attempts=attempt + 1)
                 return resp
-            except (RateLimitError, InternalServerError):   # 429, or 5xx such as 503 overloaded
+            except (RateLimitError, InternalServerError, APIConnectionError):
+                # 429, a 5xx such as 503 overloaded, or a request that hung past
+                # REQUEST_TIMEOUT_S (APITimeoutError is an APIConnectionError) —
+                # the last of these is what a stuck free-tier call raises now,
+                # instead of blocking for minutes with nothing in the trace.
                 sleep_s = min(60, 2 ** attempt) + random.random()
                 backoff += sleep_s
                 time.sleep(sleep_s)   # backoff with jitter
@@ -163,7 +177,8 @@ _genai_client_singleton = None
 def _chat_client() -> OpenAI:
     global _chat_client_singleton
     if _chat_client_singleton is None:
-        _chat_client_singleton = OpenAI(base_url=GEMINI_BASE_URL, api_key=_api_key())
+        _chat_client_singleton = OpenAI(base_url=GEMINI_BASE_URL, api_key=_api_key(),
+                                        timeout=REQUEST_TIMEOUT_S, max_retries=0)
     return _chat_client_singleton
 
 
